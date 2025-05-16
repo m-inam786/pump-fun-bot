@@ -253,9 +253,17 @@ class TrailingTokenSeller(TokenSeller):
                     await self.price_listener.stop_monitoring()
                     
             except Exception as e:
-                logger.error(f"WebSocket price monitoring failed: {e!s}. Falling back to interval polling.")
-                # Fall back to interval polling if WebSocket fails
-                self.use_websocket = False
+                logger.error(f"An error occurred during WebSocket monitoring or its cleanup: {e!s}")
+                if result_event.is_set() and sell_result is not None:
+                    logger.warning(
+                        "Sell was already processed by WebSocket before the error. "
+                        "Returning that result instead of falling back."
+                    )
+                    return sell_result
+                else:
+                    logger.info("Falling back to interval polling due to WebSocket error and no prior sell.")
+                    # Fall back to interval polling if WebSocket fails
+                    self.use_websocket = False
         
         # Fallback to interval polling if WebSocket is not available or failed
         if not self.use_websocket:
