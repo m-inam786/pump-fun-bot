@@ -25,8 +25,8 @@ trade:
   
   # Trailing profit/loss settings
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.50 # Trailing stop percentage (0.15 = 15%)
-  take_profit_percentage: 0.30 # Take profit percentage (0.50 = 50%) 
+  trailing_stop_percentage: 0.25 # Trailing stop percentage (0.15 = 15%)
+  take_profit_percentage: 0.20 # Take profit percentage (0.50 = 50%) 
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
   stagnation_timeout: 40 # Seconds of no price change before selling
 
