@@ -8,7 +8,7 @@ from typing import Optional, TYPE_CHECKING
 from core.client import SolanaClient
 from core.curve import BondingCurveManager
 from core.priority_fee.manager import PriorityFeeManager
-from core.pubkeys import LAMPORTS_PER_SOL
+from core.pubkeys import LAMPORTS_PER_SOL, TOKEN_DECIMALS
 from core.wallet import Wallet
 from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
@@ -75,6 +75,7 @@ class TrailingTokenSeller(TokenSeller):
         self._sell_in_progress = asyncio.Lock()  # Add a lock to prevent multiple simultaneous sells
 
     async def execute(self, token_info: TokenInfo, 
+                      token_balance: int,
                      entry_price: Optional[float] = None,
                      *args, **kwargs) -> TradeResult:
         """Execute trailing sell operation.
@@ -93,33 +94,33 @@ class TrailingTokenSeller(TokenSeller):
             )
 
             # Get token balance
-            token_balance = 0  # Initialize to a default
-            for attempt in range(self.balance_fetch_retries):
-                try:
-                    token_balance = await self.client.get_token_account_balance(
-                        associated_token_account
-                    )
-                    logger.info(
-                        f"Successfully fetched token balance: {token_balance} "
-                        f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
-                    )
-                    break  # Exit loop on success
-                except Exception as e:
-                    logger.warning(
-                        f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
-                        f"{associated_token_account} failed: {e!s}"
-                    )
-                    if attempt < self.balance_fetch_retries - 1:
-                        logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
-                        await asyncio.sleep(self.balance_fetch_delay)
-                    else:
-                        logger.error(
-                            f"Failed to fetch token balance for {associated_token_account} "
-                            f"after {self.balance_fetch_retries} attempts."
-                        )
-                        raise # Re-raise the exception to be caught by the outer handler
-
-            token_balance_decimal = token_balance * 10**9  # TOKEN_DECIMALS
+            # token_balance = 0  # Initialize to a default
+            # for attempt in range(self.balance_fetch_retries):
+            #     try:
+            #         token_balance = await self.client.get_token_account_balance(
+            #             associated_token_account
+            #         )
+            #         logger.info(
+            #             f"Successfully fetched token balance: {token_balance} "
+            #             f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
+            #         )
+            #         break  # Exit loop on success
+            #     except Exception as e:
+            #         logger.warning(
+            #             f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
+            #             f"{associated_token_account} failed: {e!s}"
+            #         )
+            #         if attempt < self.balance_fetch_retries - 1:
+            #             logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
+            #             await asyncio.sleep(self.balance_fetch_delay)
+            #         else:
+            #             logger.error(
+            #                 f"Failed to fetch token balance for {associated_token_account} "
+            #                 f"after {self.balance_fetch_retries} attempts."
+            #             )
+            #             raise # Re-raise the exception to be caught by the outer handler
+            
+            token_balance_decimal = token_balance / 10**TOKEN_DECIMALS  # TOKEN_DECIMALS
 
             logger.info(f"Token balance: {token_balance_decimal}")
 

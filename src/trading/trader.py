@@ -33,6 +33,7 @@ from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
 from trading.trailing_seller import TrailingTokenSeller
 from utils.logger import get_logger
+from core.pubkeys import TOKEN_DECIMALS
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -542,7 +543,8 @@ class PumpTrader:
                 logger.info(f"Using trailing profit/loss strategy for selling | mint: {token_info.mint} | symbol: {token_info.symbol} | entry_price: {buy_result.price}")
                 sell_result: TradeResult = await self.seller.execute(
                     token_info, 
-                    entry_price=buy_result.price
+                    entry_price=buy_result.price,
+                    token_balance=buy_result.amount * 10**TOKEN_DECIMALS
                 )
             else:
                 logger.info(f"Waiting for {self.wait_time_after_buy} seconds before selling...")
