@@ -233,7 +233,7 @@ class TrailingTokenSeller(TokenSeller):
                 # Start the price listener
                 await self.price_listener.start_monitoring(
                     token_info.bonding_curve,
-                    lambda price: asyncio.create_task(on_price_update(price))
+                    on_price_update
                 )
                 
                 # Start the timeout checker
