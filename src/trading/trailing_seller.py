@@ -133,9 +133,9 @@ class TrailingTokenSeller(TokenSeller):
                     token_info.bonding_curve
                 )
                 entry_price = curve_state.calculate_price()
-                logger.info(f"Using current price as entry price: {entry_price:.8f} SOL")
+                logger.info(f"Using current price as entry price: {entry_price} SOL")
             else:
-                logger.info(f"Using provided entry price: {entry_price:.8f} SOL")
+                logger.info(f"Using provided entry price: {entry_price} SOL")
 
             return await self._monitor_price_and_sell(token_info, token_balance, entry_price)
 
@@ -174,9 +174,9 @@ class TrailingTokenSeller(TokenSeller):
             trailing_stop = entry_price * (1 - self.trailing_stop_percentage)
 
         logger.info(f"Starting price monitoring with:")
-        logger.info(f"  Entry price: {entry_price:.8f} SOL")
-        logger.info(f"  Initial trailing stop: {trailing_stop:.8f} SOL")
-        logger.info(f"  Take profit target: {take_profit_target:.8f} SOL")
+        logger.info(f"  Entry price: {entry_price} SOL")
+        logger.info(f"  Initial trailing stop: {trailing_stop} SOL")
+        logger.info(f"  Take profit target: {take_profit_target} SOL")
         
         # Result will be set by the callback function
         result_event = asyncio.Event()
