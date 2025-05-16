@@ -28,6 +28,7 @@ from monitoring.logs_listener import LogsListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
+from trading.trailing_seller import TrailingTokenSeller
 from utils.logger import get_logger
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -60,6 +61,13 @@ class PumpTrader:
         extra_priority_fee: float = 0.0,
         hard_cap_prior_fee: int = 200_000,
         
+        # Trailing profit/loss settings
+        use_trailing_profit_loss: bool = False,
+        trailing_stop_percentage: float = 0.15,
+        take_profit_percentage: float = 0.50,
+        price_check_interval: float = 1.0,
+        stagnation_timeout: int = 15,
+        
         # Retry and timeout settings
         max_retries: int = 3,
         wait_time_after_creation: int = 15, # here and further - seconds
@@ -78,6 +86,9 @@ class PumpTrader:
         bro_address: str | None = None,
         marry_mode: bool = False,
         yolo_mode: bool = False,
+        
+        # Concurrency settings
+        processor_count: int = 1,
     ):
         """Initialize the pump trader.
         Args:
@@ -117,6 +128,8 @@ class PumpTrader:
             bro_address: Optional creator address to filter by
             marry_mode: If True, only buy tokens and skip selling
             yolo_mode: If True, trade continuously
+            
+            processor_count: Number of concurrent token processor tasks
         """
         self.solana_client = SolanaClient(rpc_endpoint)
         self.wallet = Wallet(private_key)
@@ -140,14 +153,34 @@ class PumpTrader:
             extreme_fast_token_amount,
             extreme_fast_mode
         )
-        self.seller = TokenSeller(
-            self.solana_client,
-            self.wallet,
-            self.curve_manager,
-            self.priority_fee_manager,
-            sell_slippage,
-            max_retries,
-        )
+        # Initialize seller based on configuration
+        if use_trailing_profit_loss:
+            self.seller = TrailingTokenSeller(
+                self.solana_client,
+                self.wallet,
+                self.curve_manager,
+                self.priority_fee_manager,
+                sell_slippage,
+                max_retries,
+                trailing_stop_percentage,
+                take_profit_percentage,
+                price_check_interval,
+                wss_endpoint,  # Pass WebSocket endpoint for real-time monitoring
+                stagnation_timeout,  # Pass stagnation timeout for auto-selling
+            )
+            logger.info("Using trailing profit/loss seller with real-time WebSocket monitoring")
+            logger.info(f"  Trailing stop: {trailing_stop_percentage * 100:.1f}%")
+            logger.info(f"  Take profit: {take_profit_percentage * 100:.1f}%")
+            logger.info(f"  Price stagnation timeout: {stagnation_timeout} seconds")
+        else:
+            self.seller = TokenSeller(
+                self.solana_client,
+                self.wallet,
+                self.curve_manager,
+                self.priority_fee_manager,
+                sell_slippage,
+                max_retries,
+            )
         
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()
@@ -195,12 +228,20 @@ class PumpTrader:
         self.marry_mode = marry_mode
         self.yolo_mode = yolo_mode
         
+        # Concurrency settings
+        self.processor_count = processor_count
+        
         # State tracking
         self.traded_mints: set[Pubkey] = set()
         self.token_queue: asyncio.Queue = asyncio.Queue()
         self.processing: bool = False
         self.processed_tokens: set[str] = set()
         self.token_timestamps: dict[str, float] = {}
+        self.processor_tasks: list[asyncio.Task] = []
+        
+        # Thread safety
+        self.processed_tokens_lock = asyncio.Lock()
+        self.traded_mints_lock = asyncio.Lock()
         
     async def start(self) -> None:
         """Start the trading bot and listen for new tokens."""
@@ -210,6 +251,7 @@ class PumpTrader:
         logger.info(f"Marry mode: {self.marry_mode}")
         logger.info(f"YOLO mode: {self.yolo_mode}")
         logger.info(f"Max token age: {self.max_token_age} seconds")
+        logger.info(f"Concurrent processors: {self.processor_count}")
 
         try:
             health_resp = await self.solana_client.get_health()
@@ -231,9 +273,14 @@ class PumpTrader:
             else:
                 # Continuous mode: process tokens until interrupted
                 logger.info("Running in continuous mode - will process tokens until interrupted")
-                processor_task = asyncio.create_task(
-                    self._process_token_queue()
-                )
+                
+                # Create multiple processor tasks
+                logger.info(f"Starting {self.processor_count} concurrent token processors")
+                for i in range(self.processor_count):
+                    processor_task = asyncio.create_task(
+                        self._process_token_queue(i)
+                    )
+                    self.processor_tasks.append(processor_task)
 
                 try:
                     await self.token_listener.listen_for_tokens(
@@ -244,11 +291,13 @@ class PumpTrader:
                 except Exception as e:
                     logger.error(f"Token listening stopped due to error: {e!s}")
                 finally:
-                    processor_task.cancel()
-                    try:
-                        await processor_task
-                    except asyncio.CancelledError:
-                        pass
+                    # Cancel all processor tasks
+                    for task in self.processor_tasks:
+                        task.cancel()
+                    
+                    # Wait for all tasks to be cancelled
+                    if self.processor_tasks:
+                        await asyncio.gather(*self.processor_tasks, return_exceptions=True)
         
         except Exception as e:
             logger.error(f"Trading stopped due to error: {e!s}")
@@ -272,12 +321,13 @@ class PumpTrader:
             token_key = str(token.mint)
             
             # Only process if not already processed and fresh
-            if token_key not in self.processed_tokens:
-                # Record when the token was discovered
-                self.token_timestamps[token_key] = monotonic()
-                found_token = token
-                self.processed_tokens.add(token_key)
-                token_found.set()
+            async with self.processed_tokens_lock:
+                if token_key not in self.processed_tokens:
+                    # Record when the token was discovered
+                    self.token_timestamps[token_key] = monotonic()
+                    found_token = token
+                    self.processed_tokens.add(token_key)
+                    token_found.set()
         
         listener_task = asyncio.create_task(
             self.token_listener.listen_for_tokens(
@@ -336,50 +386,68 @@ class PumpTrader:
         """
         token_key = str(token_info.mint)
 
-        if token_key in self.processed_tokens:
-            logger.debug(f"Token {token_info.symbol} already processed. Skipping...")
-            return
+        async with self.processed_tokens_lock:
+            if token_key in self.processed_tokens:
+                logger.debug(f"Token {token_info.symbol} already processed. Skipping...")
+                return
 
-        # Record timestamp when token was discovered
-        self.token_timestamps[token_key] = monotonic()
+            # Record timestamp when token was discovered
+            self.token_timestamps[token_key] = monotonic()
 
         await self.token_queue.put(token_info)
         logger.info(f"Queued new token: {token_info.symbol} ({token_info.mint})")
 
-    async def _process_token_queue(self) -> None:
-        """Continuously process tokens from the queue, only if they're fresh."""
+    async def _process_token_queue(self, processor_id: int) -> None:
+        """Continuously process tokens from the queue, only if they're fresh.
+        
+        Args:
+            processor_id: Unique identifier for this processor task
+        """
+        logger.info(f"Token processor {processor_id} started")
+        
         while True:
             try:
                 token_info = await self.token_queue.get()
                 token_key = str(token_info.mint)
 
-                # Check if token is still "fresh"
+                # Check if token is still "fresh" and not already processed
                 current_time = monotonic()
                 token_age = current_time - self.token_timestamps.get(
                     token_key, current_time
                 )
+                
+                is_processed = False
+                async with self.processed_tokens_lock:
+                    if token_key in self.processed_tokens:
+                        is_processed = True
+                    else:
+                        self.processed_tokens.add(token_key)
 
+                if is_processed:
+                    logger.debug(f"Processor {processor_id}: Token {token_info.symbol} already processed by another processor")
+                    continue
+                
                 if token_age > self.max_token_age:
                     logger.info(
-                        f"Skipping token {token_info.symbol} - too old ({token_age:.1f}s > {self.max_token_age}s)"
+                        f"Processor {processor_id}: Skipping token {token_info.symbol} - too old ({token_age:.1f}s > {self.max_token_age}s)"
                     )
                     continue
 
-                self.processed_tokens.add(token_key)
-
                 logger.info(
-                    f"Processing fresh token: {token_info.symbol} (age: {token_age:.1f}s)"
+                    f"Processor {processor_id}: Processing fresh token: {token_info.symbol} (age: {token_age:.1f}s)"
                 )
                 await self._handle_token(token_info)
 
             except asyncio.CancelledError:
                 # Handle cancellation gracefully
-                logger.info("Token queue processor was cancelled")
+                logger.info(f"Token processor {processor_id} was cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in token queue processor: {e!s}")
+                logger.error(f"Error in token processor {processor_id}: {e!s}")
             finally:
                 self.token_queue.task_done()
+                
+        logger.info(f"Token processor {processor_id} stopped")
 
     async def _handle_token(
         self, token_info: TokenInfo
@@ -437,17 +505,24 @@ class PumpTrader:
             buy_result.amount,  # type: ignore
             buy_result.tx_signature,
         )
-        self.traded_mints.add(token_info.mint)
+        
+        async with self.traded_mints_lock:
+            self.traded_mints.add(token_info.mint)
         
         # Sell token if not in marry mode
-        if not self.marry_mode:
-            logger.info(
-                f"Waiting for {self.wait_time_after_buy} seconds before selling..."
-            )
-            await asyncio.sleep(self.wait_time_after_buy)
-
-            logger.info(f"Selling {token_info.symbol}...")
-            sell_result: TradeResult = await self.seller.execute(token_info)
+        if not self.marry_mode:            
+            # If using TrailingTokenSeller, pass the buy price as entry_price
+            if isinstance(self.seller, TrailingTokenSeller):
+                logger.info(f"Using trailing profit/loss strategy for selling | mint: {token_info.mint} | symbol: {token_info.symbol} | entry_price: {buy_result.price}")
+                sell_result: TradeResult = await self.seller.execute(
+                    token_info, 
+                    entry_price=buy_result.price
+                )
+            else:
+                logger.info(f"Waiting for {self.wait_time_after_buy} seconds before selling...")
+                await asyncio.sleep(self.wait_time_after_buy)
+                logger.info(f"Selling {token_info.symbol}...")
+                sell_result: TradeResult = await self.seller.execute(token_info)
 
             if sell_result.success:
                 logger.info(f"Successfully sold {token_info.symbol}")

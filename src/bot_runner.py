@@ -69,6 +69,13 @@ async def start_bot(config_path: str):
         extra_priority_fee=cfg.get("priority_fees", {}).get("extra_percentage", 0.0),
         hard_cap_prior_fee=cfg.get("priority_fees", {}).get("hard_cap", 500000),
         
+        # Trailing profit/loss settings
+        use_trailing_profit_loss=cfg.get("trade", {}).get("use_trailing_profit_loss", False),
+        trailing_stop_percentage=cfg.get("trade", {}).get("trailing_stop_percentage", 0.15),
+        take_profit_percentage=cfg.get("trade", {}).get("take_profit_percentage", 0.50),
+        price_check_interval=cfg.get("trade", {}).get("price_check_interval", 1.0),
+        stagnation_timeout=cfg.get("trade", {}).get("stagnation_timeout", 15),
+        
         # Retry and timeout settings
         max_retries=cfg.get("retries", {}).get("max_attempts", 10),
         wait_time_after_creation=cfg.get("retries", {}).get("wait_after_creation", 15),
