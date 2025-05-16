@@ -21,6 +21,8 @@ from core.pubkeys import (
 from core.wallet import Wallet
 from trading.base import TokenInfo, Trader, TradeResult
 from utils.logger import get_logger
+from utils.serializer import PumpFunSerializer
+from decimal import Decimal
 
 logger = get_logger(__name__)
 
@@ -64,6 +66,7 @@ class TokenBuyer(Trader):
         self.max_retries = max_retries
         self.extreme_fast_mode = extreme_fast_mode
         self.extreme_fast_token_amount = extreme_fast_token_amount
+        self.serializer = PumpFunSerializer()
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute buy operation.
@@ -110,27 +113,50 @@ class TokenBuyer(Trader):
                 max_amount_lamports,
             )
 
-            success = await self.client.confirm_transaction(tx_signature)
+            tx_details = await self.client.confirm_transaction(tx_signature)
 
-            if success:
+            if tx_details:
+                # parse tx_details to get the amount of tokens bought
+                for log_entry in tx_details.transaction.meta.log_messages:
+                    if "Program data:" in log_entry:
+                        try:
+                            idx = log_entry.find("Program data: ")
+                            raw_data = log_entry[idx + len("Program data: "):]
+                            
+                            # Ensure raw_data is a string and matches expected prefix
+                            if isinstance(raw_data, str) and raw_data.startswith("vdt"):
+                                parsed_data = self.serializer.parse_transaction_data(raw_data)
+                            else:
+                                # logger.debug(f"Skipping non-vdt program data: {raw_data[:50]}...")
+                                continue 
+                            
+                            if "virtual_sol_reserves" in parsed_data and "virtual_token_reserves" in parsed_data:
+                                try:
+                                    # Ensure these are strings before creating Decimal
+                                    if not isinstance(parsed_data["virtual_sol_reserves"], str) or not isinstance(parsed_data["virtual_token_reserves"], str):
+                                        logger.warning(f"Reserve values are not strings for mint {self.mint}. VSR: {type(parsed_data['virtual_sol_reserves'])}, VTR: {type(parsed_data['virtual_token_reserves'])}")
+                                        continue
+
+                                    vsr_str = parsed_data["virtual_sol_reserves"]
+                                    vtr_str = parsed_data["virtual_token_reserves"]
+                                    
+                                    vsr = Decimal(vsr_str) / Decimal('1e9')  # SOL has 9 decimals
+                                    vtr = Decimal(vtr_str) / Decimal('1e6')  # Tokens have 6 decimals
+                                    
+                                    token_price_sol = vsr / vtr
+                                    logger.info(f"Token price from tx details: {token_price_sol:.8f} SOL")
+
+                                except ValueError as ve:
+                                    logger.error(f"ValueError converting reserves to Decimal for mint {self.mint}: {ve}. Data: {parsed_data}")
+                        except Exception as e:
+                            logger.error(f"Error calculating price from parsed data for mint {self.mint}: {e}. Data: {parsed_data}")
+                
                 logger.info(f"Buy transaction confirmed: {tx_signature}")
-                
-                # Get accurate token price after transaction, especially important for extreme fast mode
-                actual_token_price = token_price_sol
-                if self.extreme_fast_mode:
-                    try:
-                        # Fetch the actual curve state after transaction to get accurate price
-                        curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
-                        actual_token_price = curve_state.calculate_price()
-                        logger.info(f"Post-transaction accurate price: {actual_token_price:.8f} SOL per token")
-                    except Exception as e:
-                        logger.warning(f"Failed to get accurate token price after transaction: {e!s}")
-                
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,
                     amount=token_amount,
-                    price=actual_token_price,
+                    price=token_price_sol,
                 )
             else:
                 return TradeResult(

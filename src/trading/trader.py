@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime
 from time import monotonic
+from typing import Optional
 
 import uvloop
 from solders.pubkey import Pubkey
@@ -25,6 +26,8 @@ from core.wallet import Wallet
 from monitoring.block_listener import BlockListener
 from monitoring.geyser_listener import GeyserListener
 from monitoring.logs_listener import LogsListener
+from monitoring.shared_websocket_listener import SharedWebsocketListener
+from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
@@ -134,6 +137,7 @@ class PumpTrader:
         self.solana_client = SolanaClient(rpc_endpoint)
         self.wallet = Wallet(private_key)
         self.curve_manager = BondingCurveManager(self.solana_client)
+        self.shared_websocket_listener = SharedWebsocketListener(wss_endpoint)
         self.priority_fee_manager = PriorityFeeManager(
             client=self.solana_client,
             enable_dynamic_fee=enable_dynamic_priority_fee,
@@ -156,17 +160,17 @@ class PumpTrader:
         # Initialize seller based on configuration
         if use_trailing_profit_loss:
             self.seller = TrailingTokenSeller(
-                self.solana_client,
-                self.wallet,
-                self.curve_manager,
-                self.priority_fee_manager,
-                sell_slippage,
-                max_retries,
-                trailing_stop_percentage,
-                take_profit_percentage,
-                price_check_interval,
-                wss_endpoint,  # Pass WebSocket endpoint for real-time monitoring
-                stagnation_timeout,  # Pass stagnation timeout for auto-selling
+                client=self.solana_client,
+                wallet=self.wallet,
+                curve_manager=self.curve_manager,
+                priority_fee_manager=self.priority_fee_manager,
+                shared_listener=self.shared_websocket_listener,
+                slippage=sell_slippage,
+                max_retries=max_retries,
+                trailing_stop_percentage=trailing_stop_percentage,
+                take_profit_percentage=take_profit_percentage,
+                check_interval=price_check_interval,
+                stagnation_timeout=stagnation_timeout,  # Pass stagnation timeout for auto-selling
             )
             logger.info("Using trailing profit/loss seller with real-time WebSocket monitoring")
             logger.info(f"  Trailing stop: {trailing_stop_percentage * 100:.1f}%")
@@ -258,6 +262,23 @@ class PumpTrader:
             logger.info(f"RPC warm-up successful (getHealth passed: {health_resp})")
         except Exception as e:
             logger.warning(f"RPC warm-up failed: {e!s}")
+
+        # Start the shared WebSocket listener
+        await self.shared_websocket_listener.start()
+
+        # Connect the shared WebSocket listener if it's going to be used
+        # (e.g., by TrailingTokenSeller or pre-buy listeners)
+        # if self.shared_websocket_listener: # Check if it exists # REMOVED BLOCK
+        #     try: # REMOVED BLOCK
+        #         logger.info("Attempting to connect shared WebSocket listener...") # REMOVED BLOCK
+        #         await self.shared_websocket_listener.connect() # REMOVED LINE - This was causing the error
+        #         logger.info("Shared WebSocket listener connected successfully.") # REMOVED BLOCK
+        #     except Exception as e: # REMOVED BLOCK
+        #         logger.error(f"Failed to connect shared WebSocket listener: {e!s}. Real-time price features might be affected.") # REMOVED BLOCK
+
+        # The SharedWebsocketListener is now expected to handle its connection
+        # automatically upon instantiation or when its processing loop is started
+        # (e.g., when the first processor is added).
 
         try:
             # Choose operating mode based on yolo_mode
@@ -373,6 +394,11 @@ class PumpTrader:
         old_keys = {k for k in self.token_timestamps if k not in self.processed_tokens}
         for key in old_keys:
             self.token_timestamps.pop(key, None)
+            
+        # Close the shared WebSocket listener
+        if self.shared_websocket_listener and self.shared_websocket_listener.running:
+            logger.info("Closing shared WebSocket listener...")
+            await self.shared_websocket_listener.stop()
             
         await self.solana_client.close()
 

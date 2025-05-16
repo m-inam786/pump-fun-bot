@@ -195,7 +195,7 @@ class SolanaClient:
 
     async def confirm_transaction(
         self, signature: str, commitment: str = "confirmed"
-    ) -> bool:
+    ) -> bool | None:
         """Wait for transaction confirmation.
 
         Args:
@@ -216,7 +216,7 @@ class SolanaClient:
             # A transaction might be confirmed but still failed during execution
             if response.value is None:
                 logger.error(f"Transaction {signature} could not be found")
-                return False
+                return None
             
             # Check if transaction was successful
             if response.value.transaction.meta and response.value.transaction.meta.err:
@@ -239,12 +239,13 @@ class SolanaClient:
                 except Exception as log_error:
                     logger.error(f"Error extracting detailed error information: {log_error}")
                 
-                return False
-                
-            return True
+                return None
+
+            return response.value
+        
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")
-            return False
+            return None
 
     async def post_rpc(self, body: dict[str, Any]) -> dict[str, Any] | None:
         """

@@ -19,7 +19,7 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.001 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.05 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
@@ -28,11 +28,11 @@ trade:
   trailing_stop_percentage: 0.50 # Trailing stop percentage (0.15 = 15%)
   take_profit_percentage: 0.30 # Take profit percentage (0.50 = 50%) 
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
-  stagnation_timeout: 15 # Seconds of no price change before selling
+  stagnation_timeout: 40 # Seconds of no price change before selling
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  extreme_fast_token_amount: 20 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:

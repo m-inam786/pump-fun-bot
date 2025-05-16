@@ -3,7 +3,7 @@ Trailing profit/loss sell operations for pump.fun tokens.
 """
 
 import asyncio
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from core.client import SolanaClient
 from core.curve import BondingCurveManager
@@ -14,6 +14,11 @@ from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
 from trading.seller import TokenSeller
 from utils.logger import get_logger
+from decimal import Decimal
+
+# For type hinting SharedWebsocketListener without circular imports
+if TYPE_CHECKING:
+    from monitoring.shared_websocket_listener import SharedWebsocketListener
 
 logger = get_logger(__name__)
 
@@ -27,12 +32,12 @@ class TrailingTokenSeller(TokenSeller):
         wallet: Wallet,
         curve_manager: BondingCurveManager,
         priority_fee_manager: PriorityFeeManager,
+        shared_listener: 'SharedWebsocketListener',
         slippage: float = 0.25,
         max_retries: int = 5,
         trailing_stop_percentage: float = 0.15,  # 15% trailing stop
         take_profit_percentage: float = 0.50,    # 50% take profit
         check_interval: float = 1.0,             # Only used as fallback if WebSocket fails
-        wss_endpoint: str = None,                # WebSocket endpoint for real-time monitoring
         stagnation_timeout: int = 15,            # Seconds of no price change before selling
         balance_fetch_retries: int = 5,          # Retries for fetching token balance
         balance_fetch_delay: float = 5.0,        # Delay between balance fetch retries
@@ -44,12 +49,12 @@ class TrailingTokenSeller(TokenSeller):
             wallet: Wallet for signing transactions
             curve_manager: Bonding curve manager
             priority_fee_manager: Priority fee manager
+            shared_listener: Instance of SharedWebsocketListener for price updates.
             slippage: Slippage tolerance (0.25 = 25%)
             max_retries: Maximum number of retry attempts
             trailing_stop_percentage: Trailing stop percentage (0.15 = 15%)
             take_profit_percentage: Take profit percentage (0.50 = 50%)
             check_interval: Price check interval in seconds (fallback only)
-            wss_endpoint: WebSocket endpoint for real-time monitoring
             stagnation_timeout: Seconds of no price change before selling
             balance_fetch_retries: Number of retries for fetching token balance
             balance_fetch_delay: Delay in seconds between balance fetch retries
@@ -57,17 +62,16 @@ class TrailingTokenSeller(TokenSeller):
         super().__init__(
             client, wallet, curve_manager, priority_fee_manager, slippage, max_retries
         )
+        self.shared_listener = shared_listener
         self.trailing_stop_percentage = trailing_stop_percentage
         self.take_profit_percentage = take_profit_percentage
         self.check_interval = check_interval
-        self.wss_endpoint = wss_endpoint
         self.stagnation_timeout = stagnation_timeout
         self.balance_fetch_retries = balance_fetch_retries
         self.balance_fetch_delay = balance_fetch_delay
         
-        # Will be initialized during execution
-        self.price_listener = None
-        self.use_websocket = wss_endpoint is not None
+        self.price_listener_instance: Optional[PriceListener] = None
+        self.use_websocket = shared_listener is not None
 
     async def execute(self, token_info: TokenInfo, 
                      entry_price: Optional[float] = None,
@@ -152,9 +156,22 @@ class TrailingTokenSeller(TokenSeller):
         Returns:
             TradeResult with sell outcome
         """
-        highest_price = entry_price
-        take_profit_target = entry_price * (1 + self.take_profit_percentage)
-        trailing_stop = entry_price * (1 - self.trailing_stop_percentage)
+        # Check if entry_price is a Decimal and handle accordingly
+        from decimal import Decimal
+        
+        if isinstance(entry_price, Decimal):
+            # If entry_price is Decimal, convert percentage values to Decimal
+            highest_price = entry_price
+            take_profit_percentage_decimal = Decimal(str(self.take_profit_percentage))
+            trailing_stop_percentage_decimal = Decimal(str(self.trailing_stop_percentage))
+            
+            take_profit_target = entry_price * (Decimal('1') + take_profit_percentage_decimal)
+            trailing_stop = entry_price * (Decimal('1') - trailing_stop_percentage_decimal)
+        else:
+            # Handle as regular float values
+            highest_price = entry_price
+            take_profit_target = entry_price * (1 + self.take_profit_percentage)
+            trailing_stop = entry_price * (1 - self.trailing_stop_percentage)
 
         logger.info(f"Starting price monitoring with:")
         logger.info(f"  Entry price: {entry_price:.8f} SOL")
@@ -163,7 +180,7 @@ class TrailingTokenSeller(TokenSeller):
         
         # Result will be set by the callback function
         result_event = asyncio.Event()
-        sell_result = None
+        sell_result: Optional[TradeResult] = None
         
         # Timeout to sell if no price changes occur
         price_stagnation_timeout = self.stagnation_timeout
@@ -171,10 +188,15 @@ class TrailingTokenSeller(TokenSeller):
         timeout_task = None
         
         if self.use_websocket:
-            # Use WebSocket for real-time price monitoring
-            logger.info("Using WebSocket for real-time price monitoring")
+            # Use WebSocket for real-time price monitoring via SharedWebsocketListener
+            logger.info("Using SharedWebsocketListener for real-time price monitoring")
             try:
-                self.price_listener = PriceListener(self.wss_endpoint, self.curve_manager)
+                # Create a PriceListener instance that uses the shared_listener
+                self.price_listener_instance = PriceListener(
+                    shared_listener=self.shared_listener, 
+                    curve_manager=self.curve_manager, 
+                    mint=token_info.mint
+                )
                 
                 # Define the price update callback
                 async def on_price_update(price: float) -> None:
@@ -184,30 +206,59 @@ class TrailingTokenSeller(TokenSeller):
                         # Update the last price update time
                         last_price_update_time = asyncio.get_event_loop().time()
                         
-                        profit_percent = (price - entry_price) / entry_price * 100
-                        
-                        logger.info(
-                            f"WebSocket price update: {price:.8f} SOL (P/L: {profit_percent:.2f}%), "
-                            f"Trailing stop: {trailing_stop:.8f} SOL"
-                        )
-                        
-                        # Update trailing stop if price goes higher
-                        if price > highest_price:
-                            highest_price = price
-                            trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
-                            logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
-                        
-                        # Check if we should sell
-                        if price <= trailing_stop:
-                            logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
-                            sell_result = await self._execute_sell(token_info, token_balance, price)
-                            result_event.set()
-                        
-                        # Check take profit target
-                        elif price >= take_profit_target:
-                            logger.info(f"Take profit target reached at price: {price:.8f} SOL")
-                            sell_result = await self._execute_sell(token_info, token_balance, price)
-                            result_event.set()
+                        # Convert price to Decimal if entry_price is Decimal
+                        if isinstance(entry_price, Decimal):
+                            price_decimal = Decimal(str(price))
+                            profit_percent = (price_decimal - entry_price) / entry_price * Decimal('100')
+                            
+                            logger.info(
+                                f"WebSocket price update: {price:.8f} SOL (P/L: {profit_percent:.2f}%), "
+                                f"Trailing stop: {trailing_stop:.8f} SOL"
+                            )
+                            
+                            # Update trailing stop if price goes higher
+                            if price_decimal > highest_price:
+                                highest_price = price_decimal
+                                trailing_stop = highest_price * (Decimal('1') - trailing_stop_percentage_decimal)
+                                logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+                            
+                            # Check if we should sell
+                            if price_decimal <= trailing_stop:
+                                logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
+                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                result_event.set()
+                            
+                            # Check take profit target
+                            elif price_decimal >= take_profit_target:
+                                logger.info(f"Take profit target reached at price: {price:.8f} SOL")
+                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                result_event.set()
+                        else:
+                            # Original float-based logic
+                            profit_percent = (price - entry_price) / entry_price * 100
+                            
+                            logger.info(
+                                f"WebSocket price update: {price:.8f} SOL (P/L: {profit_percent:.2f}%), "
+                                f"Trailing stop: {trailing_stop:.8f} SOL"
+                            )
+                            
+                            # Update trailing stop if price goes higher
+                            if price > highest_price:
+                                highest_price = price
+                                trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
+                                logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+                            
+                            # Check if we should sell
+                            if price <= trailing_stop:
+                                logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
+                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                result_event.set()
+                            
+                            # Check take profit target
+                            elif price >= take_profit_target:
+                                logger.info(f"Take profit target reached at price: {price:.8f} SOL")
+                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                result_event.set()
                 
                 # Function to check for price stagnation
                 async def check_price_stagnation():
@@ -230,10 +281,9 @@ class TrailingTokenSeller(TokenSeller):
                         # Check again in 1 second
                         await asyncio.sleep(1)
                 
-                # Start the price listener
-                await self.price_listener.start_monitoring(
-                    token_info.bonding_curve,
-                    on_price_update
+                # Start the price listener (which registers with the shared listener)
+                await self.price_listener_instance.start_monitoring(
+                    price_callback=on_price_update
                 )
                 
                 # Start the timeout checker
@@ -250,10 +300,12 @@ class TrailingTokenSeller(TokenSeller):
                     # Make sure to stop the price listener and timeout task
                     if timeout_task and not timeout_task.done():
                         timeout_task.cancel()
-                    await self.price_listener.stop_monitoring()
+                    if self.price_listener_instance:
+                        await self.price_listener_instance.stop_monitoring()
+                        self.price_listener_instance = None
                     
             except Exception as e:
-                logger.error(f"An error occurred during WebSocket monitoring or its cleanup: {e!s}")
+                logger.error(f"An error occurred during SharedWS-based monitoring or its cleanup: {e!s}", exc_info=True)
                 if result_event.is_set() and sell_result is not None:
                     logger.warning(
                         "Sell was already processed by WebSocket before the error. "
@@ -280,45 +332,92 @@ class TrailingTokenSeller(TokenSeller):
                         token_info.bonding_curve
                     )
                     current_price = curve_state.calculate_price()
-                    current_value = current_price * token_balance / 10**9  # TOKEN_DECIMALS
-                    profit_percent = (current_price - entry_price) / entry_price * 100
-
-                    logger.info(
-                        f"Current price: {current_price:.8f} SOL (P/L: {profit_percent:.2f}%), "
-                        f"Trailing stop: {trailing_stop:.8f} SOL"
-                    )
                     
-                    # Check for price stagnation
-                    if last_price is not None:
-                        if abs(current_price - last_price) > 0.0000001:  # Price changed (accounting for floating point precision)
-                            last_price_change_time = asyncio.get_event_loop().time()
-                        else:
-                            # Check if price hasn't changed for the timeout period
-                            current_time = asyncio.get_event_loop().time()
-                            time_since_last_change = current_time - last_price_change_time
-                            
-                            if time_since_last_change >= price_stagnation_timeout:
-                                logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                                return await self._execute_sell(token_info, token_balance, current_price)
-                    
-                    # Store current price for next comparison
-                    last_price = current_price
+                    # Handle Decimal arithmetic if entry_price is Decimal
+                    if isinstance(entry_price, Decimal):
+                        if not isinstance(current_price, Decimal):
+                            current_price = Decimal(str(current_price))
+                        
+                        current_value = current_price * Decimal(str(token_balance)) / Decimal('1e9')  # TOKEN_DECIMALS
+                        profit_percent = (current_price - entry_price) / entry_price * Decimal('100')
+                        
+                        logger.info(
+                            f"Current price: {current_price:.8f} SOL (P/L: {profit_percent:.2f}%), "
+                            f"Trailing stop: {trailing_stop:.8f} SOL"
+                        )
+                        
+                        # Check for price stagnation
+                        if last_price is not None:
+                            if abs(current_price - last_price) > Decimal('0.0000001'):  # Price changed (accounting for floating point precision)
+                                last_price_change_time = asyncio.get_event_loop().time()
+                            else:
+                                # Check if price hasn't changed for the timeout period
+                                current_time = asyncio.get_event_loop().time()
+                                time_since_last_change = current_time - last_price_change_time
+                                
+                                if time_since_last_change >= price_stagnation_timeout:
+                                    logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
+                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                        
+                        # Store current price for next comparison
+                        last_price = current_price
 
-                    # Update trailing stop if price goes higher
-                    if current_price > highest_price:
-                        highest_price = current_price
-                        trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
-                        logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+                        # Update trailing stop if price goes higher
+                        if current_price > highest_price:
+                            highest_price = current_price
+                            trailing_stop = highest_price * (Decimal('1') - trailing_stop_percentage_decimal)
+                            logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
 
-                    # Check if we should sell
-                    if current_price <= trailing_stop:
-                        logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
-                        return await self._execute_sell(token_info, token_balance, current_price)
-                    
-                    # Check take profit target
-                    if current_price >= take_profit_target:
-                        logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                        return await self._execute_sell(token_info, token_balance, current_price)
+                        # Check if we should sell
+                        if current_price <= trailing_stop:
+                            logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
+                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                        
+                        # Check take profit target
+                        if current_price >= take_profit_target:
+                            logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
+                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                    else:
+                        # Original float-based logic
+                        current_value = current_price * token_balance / 10**9  # TOKEN_DECIMALS
+                        profit_percent = (current_price - entry_price) / entry_price * 100
+
+                        logger.info(
+                            f"Current price: {current_price:.8f} SOL (P/L: {profit_percent:.2f}%), "
+                            f"Trailing stop: {trailing_stop:.8f} SOL"
+                        )
+                        
+                        # Check for price stagnation
+                        if last_price is not None:
+                            if abs(current_price - last_price) > 0.0000001:  # Price changed (accounting for floating point precision)
+                                last_price_change_time = asyncio.get_event_loop().time()
+                            else:
+                                # Check if price hasn't changed for the timeout period
+                                current_time = asyncio.get_event_loop().time()
+                                time_since_last_change = current_time - last_price_change_time
+                                
+                                if time_since_last_change >= price_stagnation_timeout:
+                                    logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
+                                    return await self._execute_sell(token_info, token_balance, current_price)
+                        
+                        # Store current price for next comparison
+                        last_price = current_price
+
+                        # Update trailing stop if price goes higher
+                        if current_price > highest_price:
+                            highest_price = current_price
+                            trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
+                            logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+
+                        # Check if we should sell
+                        if current_price <= trailing_stop:
+                            logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
+                            return await self._execute_sell(token_info, token_balance, current_price)
+                        
+                        # Check take profit target
+                        if current_price >= take_profit_target:
+                            logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
+                            return await self._execute_sell(token_info, token_balance, current_price)
 
                     await asyncio.sleep(self.check_interval)
                 
