@@ -72,6 +72,7 @@ class TrailingTokenSeller(TokenSeller):
         
         self.price_listener_instance: Optional[PriceListener] = None
         self.use_websocket = shared_listener is not None
+        self._sell_in_progress = asyncio.Lock()  # Add a lock to prevent multiple simultaneous sells
 
     async def execute(self, token_info: TokenInfo, 
                      entry_price: Optional[float] = None,
@@ -202,7 +203,11 @@ class TrailingTokenSeller(TokenSeller):
                 async def on_price_update(price: float) -> None:
                     nonlocal highest_price, trailing_stop, sell_result, last_price_update_time
                     
-                    if not result_event.is_set():
+                    # Check if a sell is already in progress or completed
+                    if result_event.is_set() or not await self._try_acquire_sell_lock():
+                        return  # Skip if sell is already in progress/completed or lock couldn't be acquired
+                    
+                    try:
                         # Update the last price update time
                         last_price_update_time = asyncio.get_event_loop().time()
                         
@@ -259,6 +264,9 @@ class TrailingTokenSeller(TokenSeller):
                                 logger.info(f"Take profit target reached at price: {price:.8f} SOL")
                                 sell_result = await self._execute_sell(token_info, token_balance, price)
                                 result_event.set()
+                    finally:
+                        # Always release the lock when done
+                        self._sell_in_progress.release()
                 
                 # Function to check for price stagnation
                 async def check_price_stagnation():
@@ -268,15 +276,27 @@ class TrailingTokenSeller(TokenSeller):
                         time_since_last_update = current_time - last_price_update_time
                         
                         if time_since_last_update >= price_stagnation_timeout:
-                            # No price updates for the timeout period
-                            logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                            # Get current price for the sell
-                            curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
-                            current_price = curve_state.calculate_price()
-                            
-                            sell_result = await self._execute_sell(token_info, token_balance, current_price)
-                            result_event.set()
-                            break
+                            # Try to acquire the sell lock
+                            if not await self._try_acquire_sell_lock():
+                                await asyncio.sleep(1)
+                                continue
+
+                            try:
+                                # Check again after acquiring lock in case another thread sold already
+                                if result_event.is_set():
+                                    break
+                                
+                                # No price updates for the timeout period
+                                logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
+                                # Get current price for the sell
+                                curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
+                                current_price = curve_state.calculate_price()
+                                
+                                sell_result = await self._execute_sell(token_info, token_balance, current_price)
+                                result_event.set()
+                                break
+                            finally:
+                                self._sell_in_progress.release()
                             
                         # Check again in 1 second
                         await asyncio.sleep(1)
@@ -356,8 +376,13 @@ class TrailingTokenSeller(TokenSeller):
                                 time_since_last_change = current_time - last_price_change_time
                                 
                                 if time_since_last_change >= price_stagnation_timeout:
-                                    logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                                    # Try to acquire the sell lock
+                                    if await self._try_acquire_sell_lock():
+                                        try:
+                                            logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
+                                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                                        finally:
+                                            self._sell_in_progress.release()
                         
                         # Store current price for next comparison
                         last_price = current_price
@@ -368,15 +393,23 @@ class TrailingTokenSeller(TokenSeller):
                             trailing_stop = highest_price * (Decimal('1') - trailing_stop_percentage_decimal)
                             logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
 
-                        # Check if we should sell
+                        # Check if we should sell - with lock protection
                         if current_price <= trailing_stop:
-                            logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
-                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                            if await self._try_acquire_sell_lock():
+                                try:
+                                    logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
+                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                                finally:
+                                    self._sell_in_progress.release()
                         
-                        # Check take profit target
+                        # Check take profit target - with lock protection
                         if current_price >= take_profit_target:
-                            logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                            if await self._try_acquire_sell_lock():
+                                try:
+                                    logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
+                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                                finally:
+                                    self._sell_in_progress.release()
                     else:
                         # Original float-based logic
                         current_value = current_price * token_balance / 10**9  # TOKEN_DECIMALS
@@ -397,8 +430,13 @@ class TrailingTokenSeller(TokenSeller):
                                 time_since_last_change = current_time - last_price_change_time
                                 
                                 if time_since_last_change >= price_stagnation_timeout:
-                                    logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                                    return await self._execute_sell(token_info, token_balance, current_price)
+                                    # Try to acquire the sell lock
+                                    if await self._try_acquire_sell_lock():
+                                        try:
+                                            logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
+                                            return await self._execute_sell(token_info, token_balance, current_price)
+                                        finally:
+                                            self._sell_in_progress.release()
                         
                         # Store current price for next comparison
                         last_price = current_price
@@ -409,15 +447,23 @@ class TrailingTokenSeller(TokenSeller):
                             trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
                             logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
 
-                        # Check if we should sell
+                        # Check if we should sell - with lock protection
                         if current_price <= trailing_stop:
-                            logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
-                            return await self._execute_sell(token_info, token_balance, current_price)
+                            if await self._try_acquire_sell_lock():
+                                try:
+                                    logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
+                                    return await self._execute_sell(token_info, token_balance, current_price)
+                                finally:
+                                    self._sell_in_progress.release()
                         
-                        # Check take profit target
+                        # Check take profit target - with lock protection
                         if current_price >= take_profit_target:
-                            logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                            return await self._execute_sell(token_info, token_balance, current_price)
+                            if await self._try_acquire_sell_lock():
+                                try:
+                                    logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
+                                    return await self._execute_sell(token_info, token_balance, current_price)
+                                finally:
+                                    self._sell_in_progress.release()
 
                     await asyncio.sleep(self.check_interval)
                 
@@ -427,6 +473,23 @@ class TrailingTokenSeller(TokenSeller):
                 except Exception as e:
                     logger.error(f"Error monitoring price: {e!s}")
                     await asyncio.sleep(self.check_interval)
+
+    async def _try_acquire_sell_lock(self, timeout: float = 0.5) -> bool:
+        """Try to acquire the sell lock with a timeout.
+        
+        Args:
+            timeout: Time in seconds to wait for the lock
+            
+        Returns:
+            True if the lock was acquired, False otherwise
+        """
+        try:
+            # Try to acquire the lock with a timeout
+            await asyncio.wait_for(self._sell_in_progress.acquire(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            # Lock could not be acquired within the timeout
+            return False
 
     async def _execute_sell(
         self, token_info: TokenInfo, token_balance: int, current_price: float
@@ -441,9 +504,25 @@ class TrailingTokenSeller(TokenSeller):
         Returns:
             TradeResult with sell outcome
         """
+        # Double-check token balance to prevent selling already sold tokens
         associated_token_account = self.wallet.get_associated_token_address(
             token_info.mint
         )
+        try:
+            actual_token_balance = await self.client.get_token_account_balance(
+                associated_token_account
+            )
+            if actual_token_balance == 0:
+                logger.warning("Tokens already sold, preventing duplicate sell transaction")
+                return TradeResult(success=False, error_message="Tokens already sold")
+                
+            # Update token_balance if different from what was passed in
+            if actual_token_balance != token_balance:
+                logger.info(f"Token balance changed from {token_balance} to {actual_token_balance}")
+                token_balance = actual_token_balance
+        except Exception as e:
+            logger.warning(f"Failed to verify token balance before selling: {e!s}")
+            # Continue with the original token_balance
 
         token_balance_decimal = token_balance / 10**9  # TOKEN_DECIMALS
         expected_sol_output = token_balance_decimal * current_price
