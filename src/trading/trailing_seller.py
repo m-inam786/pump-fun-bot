@@ -239,25 +239,25 @@ class TrailingTokenSeller(TokenSeller):
                             profit_percent = (price - entry_price) / entry_price * 100
                             
                             logger.info(
-                                f"WebSocket price update: {price:.8f} SOL (P/L: {profit_percent:.2f}%), "
-                                f"Trailing stop: {trailing_stop:.8f} SOL"
+                                f"WebSocket price update: {price} SOL (P/L: {profit_percent:.2f}%), "
+                                f"Trailing stop: {trailing_stop} SOL"
                             )
                             
                             # Update trailing stop if price goes higher
                             if price > highest_price:
                                 highest_price = price
                                 trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
-                                logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+                                logger.info(f"New highest price: {highest_price} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
                             
                             # Check if we should sell
                             if price <= trailing_stop:
-                                logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
+                                logger.info(f"Trailing stop triggered at price: {price} SOL")
                                 sell_result = await self._execute_sell(token_info, token_balance, price)
                                 result_event.set()
                             
                             # Check take profit target
                             elif price >= take_profit_target:
-                                logger.info(f"Take profit target reached at price: {price:.8f} SOL")
+                                logger.info(f"Take profit target reached at price: {price} SOL")
                                 sell_result = await self._execute_sell(token_info, token_balance, price)
                                 result_event.set()
                 
@@ -446,7 +446,7 @@ class TrailingTokenSeller(TokenSeller):
             token_info.mint
         )
 
-        token_balance_decimal = token_balance / 10**9  # TOKEN_DECIMALS
+        token_balance_decimal = token_balance
         expected_sol_output = token_balance_decimal * current_price
         slippage_factor = 1 - self.slippage
         min_sol_output = int((expected_sol_output * slippage_factor) * LAMPORTS_PER_SOL)

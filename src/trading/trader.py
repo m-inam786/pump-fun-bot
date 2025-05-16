@@ -495,7 +495,7 @@ class PumpTrader:
 
             # Buy token
             logger.info(
-                f"Buying {self.buy_amount:.6f} SOL worth of {token_info.symbol}..."
+                f"Buying {self.buy_amount} SOL worth of {token_info.symbol}..."
             )
             buy_result: TradeResult = await self.buyer.execute(token_info)
 

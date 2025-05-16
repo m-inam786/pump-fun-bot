@@ -100,10 +100,10 @@ class TokenBuyer(Trader):
             )
 
             logger.info(
-                f"Buying {token_amount:.6f} tokens at {token_price_sol:.8f} SOL per token"
+                f"Buying {token_amount} tokens at {token_price_sol} SOL per token"
             )
             logger.info(
-                f"Total cost: {self.amount:.6f} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL:.6f} SOL)"
+                f"Total cost: {self.amount} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL} SOL)"
             )
 
             tx_signature = await self._send_buy_transaction(
