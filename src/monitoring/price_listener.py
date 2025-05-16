@@ -81,7 +81,7 @@ class PriceListener:
     async def _update_sol_price(self):
         while not self.stop_event.is_set():
             self.sol_price_usd = await self._get_solana_price_usd()
-            await asyncio.sleep(60)  # Update every minute instead of every 1000 seconds
+            await asyncio.sleep(480)  # Update every 8 minutes instead of every 1000 seconds
 
     async def _get_solana_price_usd(self):
         try:
@@ -92,11 +92,11 @@ class PriceListener:
                         price = data['solana']['usd']
                         return Decimal(str(price))
                     else:
-                        logger.info(f"Failed to get Solana price from Coingecko: HTTP {response.status}")
-                        return Decimal('140')
+                        logger.warning(f"Failed to get Solana price from Coingecko: HTTP {response.status}")
+                        return self.sol_price_usd
         except Exception as e:
-            logger.info(f"Failed to get Solana price from Coingecko: {str(e)}")
-            return Decimal('140')
+            logger.warning(f"Failed to get Solana price from Coingecko: {str(e)}")
+            return self.sol_price_usd
 
     async def stop_monitoring(self) -> None:
         """Stop monitoring price changes."""
