@@ -8,7 +8,7 @@ from typing import Optional, TYPE_CHECKING
 from core.client import SolanaClient
 from core.curve import BondingCurveManager
 from core.priority_fee.manager import PriorityFeeManager
-from core.pubkeys import LAMPORTS_PER_SOL
+from core.pubkeys import LAMPORTS_PER_SOL, TOKEN_DECIMALS
 from core.wallet import Wallet
 from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
@@ -81,45 +81,15 @@ class TrailingTokenSeller(TokenSeller):
 
         Args:
             token_info: Token information
+            token_balance: Token balance in raw units (already fetched)
             entry_price: Entry price in SOL (if None, will be fetched)
 
         Returns:
             TradeResult with sell outcome
         """
         try:
-            # Get associated token account
-            # associated_token_account = self.wallet.get_associated_token_address(
-            #     token_info.mint
-            # )
-
-            # # Get token balance
-            # token_balance = 0  # Initialize to a default
-            # for attempt in range(self.balance_fetch_retries):
-            #     try:
-            #         token_balance = await self.client.get_token_account_balance(
-            #             associated_token_account
-            #         )
-            #         logger.info(
-            #             f"Successfully fetched token balance: {token_balance} "
-            #             f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
-            #         )
-            #         break  # Exit loop on success
-            #     except Exception as e:
-            #         logger.warning(
-            #             f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
-            #             f"{associated_token_account} failed: {e!s}"
-            #         )
-            #         if attempt < self.balance_fetch_retries - 1:
-            #             logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
-            #             await asyncio.sleep(self.balance_fetch_delay)
-            #         else:
-            #             logger.error(
-            #                 f"Failed to fetch token balance for {associated_token_account} "
-            #                 f"after {self.balance_fetch_retries} attempts."
-            #             )
-            #             raise # Re-raise the exception to be caught by the outer handler
-
-            token_balance_decimal = token_balance * 10**9  # TOKEN_DECIMALS
+            # Convert raw token balance to decimal representation
+            token_balance_decimal = token_balance / 10**TOKEN_DECIMALS  # TOKEN_DECIMALS is 6
 
             logger.info(f"Token balance: {token_balance_decimal}")
 
@@ -442,11 +412,14 @@ class TrailingTokenSeller(TokenSeller):
         Returns:
             TradeResult with sell outcome
         """
+        from core.pubkeys import TOKEN_DECIMALS, LAMPORTS_PER_SOL
+        
         associated_token_account = self.wallet.get_associated_token_address(
             token_info.mint
         )
 
-        token_balance_decimal = token_balance
+        # Correct conversion of token balance to decimal
+        token_balance_decimal = token_balance / 10**TOKEN_DECIMALS  # TOKEN_DECIMALS is 6
         expected_sol_output = token_balance_decimal * current_price
         slippage_factor = 1 - self.slippage
         min_sol_output = int((expected_sol_output * slippage_factor) * LAMPORTS_PER_SOL)
