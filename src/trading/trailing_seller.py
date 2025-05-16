@@ -74,7 +74,6 @@ class TrailingTokenSeller(TokenSeller):
         self.use_websocket = shared_listener is not None
 
     async def execute(self, token_info: TokenInfo, 
-                      token_balance: int,
                      entry_price: Optional[float] = None,
                      *args, **kwargs) -> TradeResult:
         """Execute trailing sell operation.
@@ -88,38 +87,38 @@ class TrailingTokenSeller(TokenSeller):
         """
         try:
             # Get associated token account
-            # associated_token_account = self.wallet.get_associated_token_address(
-            #     token_info.mint
-            # )
+            associated_token_account = self.wallet.get_associated_token_address(
+                token_info.mint
+            )
 
-            # # Get token balance
-            # token_balance = 0  # Initialize to a default
-            # for attempt in range(self.balance_fetch_retries):
-            #     try:
-            #         token_balance = await self.client.get_token_account_balance(
-            #             associated_token_account
-            #         )
-            #         logger.info(
-            #             f"Successfully fetched token balance: {token_balance} "
-            #             f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
-            #         )
-            #         break  # Exit loop on success
-            #     except Exception as e:
-            #         logger.warning(
-            #             f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
-            #             f"{associated_token_account} failed: {e!s}"
-            #         )
-            #         if attempt < self.balance_fetch_retries - 1:
-            #             logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
-            #             await asyncio.sleep(self.balance_fetch_delay)
-            #         else:
-            #             logger.error(
-            #                 f"Failed to fetch token balance for {associated_token_account} "
-            #                 f"after {self.balance_fetch_retries} attempts."
-            #             )
-            #             raise # Re-raise the exception to be caught by the outer handler
+            # Get token balance
+            token_balance = 0  # Initialize to a default
+            for attempt in range(self.balance_fetch_retries):
+                try:
+                    token_balance = await self.client.get_token_account_balance(
+                        associated_token_account
+                    )
+                    logger.info(
+                        f"Successfully fetched token balance: {token_balance} "
+                        f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
+                    )
+                    break  # Exit loop on success
+                except Exception as e:
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
+                        f"{associated_token_account} failed: {e!s}"
+                    )
+                    if attempt < self.balance_fetch_retries - 1:
+                        logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
+                        await asyncio.sleep(self.balance_fetch_delay)
+                    else:
+                        logger.error(
+                            f"Failed to fetch token balance for {associated_token_account} "
+                            f"after {self.balance_fetch_retries} attempts."
+                        )
+                        raise # Re-raise the exception to be caught by the outer handler
 
-            token_balance_decimal = token_balance / 10**9  # TOKEN_DECIMALS
+            token_balance_decimal = token_balance * 10**9  # TOKEN_DECIMALS
 
             logger.info(f"Token balance: {token_balance_decimal}")
 
@@ -138,7 +137,7 @@ class TrailingTokenSeller(TokenSeller):
             else:
                 logger.info(f"Using provided entry price: {entry_price} SOL")
 
-            return await self._monitor_price_and_sell(token_info, token_balance * 10**9, entry_price)
+            return await self._monitor_price_and_sell(token_info, token_balance, entry_price)
 
         except Exception as e:
             logger.error(f"Trailing sell operation failed: {e!s}")
@@ -239,25 +238,25 @@ class TrailingTokenSeller(TokenSeller):
                             profit_percent = (price - entry_price) / entry_price * 100
                             
                             logger.info(
-                                f"WebSocket price update: {price} SOL (P/L: {profit_percent:.2f}%), "
-                                f"Trailing stop: {trailing_stop} SOL"
+                                f"WebSocket price update: {price:.8f} SOL (P/L: {profit_percent:.2f}%), "
+                                f"Trailing stop: {trailing_stop:.8f} SOL"
                             )
                             
                             # Update trailing stop if price goes higher
                             if price > highest_price:
                                 highest_price = price
                                 trailing_stop = highest_price * (1 - self.trailing_stop_percentage)
-                                logger.info(f"New highest price: {highest_price} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
+                                logger.info(f"New highest price: {highest_price:.8f} SOL, updated trailing stop: {trailing_stop:.8f} SOL")
                             
                             # Check if we should sell
                             if price <= trailing_stop:
-                                logger.info(f"Trailing stop triggered at price: {price} SOL")
+                                logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
                                 sell_result = await self._execute_sell(token_info, token_balance, price)
                                 result_event.set()
                             
                             # Check take profit target
                             elif price >= take_profit_target:
-                                logger.info(f"Take profit target reached at price: {price} SOL")
+                                logger.info(f"Take profit target reached at price: {price:.8f} SOL")
                                 sell_result = await self._execute_sell(token_info, token_balance, price)
                                 result_event.set()
                 
