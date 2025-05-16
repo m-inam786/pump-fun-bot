@@ -542,6 +542,7 @@ class PumpTrader:
                 logger.info(f"Using trailing profit/loss strategy for selling | mint: {token_info.mint} | symbol: {token_info.symbol} | entry_price: {buy_result.price}")
                 sell_result: TradeResult = await self.seller.execute(
                     token_info, 
+                    token_balance=buy_result.amount,
                     entry_price=buy_result.price
                 )
             else:
