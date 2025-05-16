@@ -114,11 +114,23 @@ class TokenBuyer(Trader):
 
             if success:
                 logger.info(f"Buy transaction confirmed: {tx_signature}")
+                
+                # Get accurate token price after transaction, especially important for extreme fast mode
+                actual_token_price = token_price_sol
+                if self.extreme_fast_mode:
+                    try:
+                        # Fetch the actual curve state after transaction to get accurate price
+                        curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
+                        actual_token_price = curve_state.calculate_price()
+                        logger.info(f"Post-transaction accurate price: {actual_token_price:.8f} SOL per token")
+                    except Exception as e:
+                        logger.warning(f"Failed to get accurate token price after transaction: {e!s}")
+                
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,
                     amount=token_amount,
-                    price=token_price_sol,
+                    price=actual_token_price,
                 )
             else:
                 return TradeResult(
