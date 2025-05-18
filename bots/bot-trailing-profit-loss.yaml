@@ -46,7 +46,7 @@ priority_fees:
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators)
-  listener_type: "logs" # Method for detecting new tokens: "logs", "blocks", or "geyser"
+  listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
   max_token_age: 0.001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
