@@ -47,7 +47,7 @@ filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators)
   listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
-  max_token_age: 0.001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
+  max_token_age: 0.0001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
 
@@ -56,7 +56,7 @@ retries:
   max_attempts: 3
   wait_after_creation: 5 # Reduced waiting time after token creation
   wait_after_buy: 15 # Only applicable if trailing stop is not used
-  wait_before_new_token: 30
+  wait_before_new_token: 10
 
 # Timing settings
 timing:
