@@ -113,6 +113,8 @@ class TokenBuyer(Trader):
                 max_amount_lamports,
             )
 
+            logger.info(f"Buy transaction sent: {tx_signature}")
+
             tx_details = await self.client.confirm_transaction(tx_signature)
 
             if tx_details:
