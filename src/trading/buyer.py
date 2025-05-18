@@ -85,7 +85,7 @@ class TokenBuyer(Trader):
                 # Skip the wait and directly calculate the amount
                 token_amount = self.extreme_fast_token_amount
                 token_price_sol = self.amount / token_amount
-                #logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
+                logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
             else:
                 # Regular behavior with RPC call
                 curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
@@ -191,6 +191,8 @@ class TokenBuyer(Trader):
         Raises:
             Exception: If transaction fails after all retries
         """
+        logger.info(f"_send_buy_transaction: Starting buy transaction function for {token_info.symbol}...")
+        
         accounts = [
             AccountMeta(
                 pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False
@@ -226,6 +228,8 @@ class TokenBuyer(Trader):
             ),
         ]
 
+        logger.info(f"_send_buy_transaction: Preparing idempotent create ATA instruction...")
+        
         # Prepare idempotent create ATA instruction: it will not fail if ATA already exists
         idempotent_ata_ix = create_idempotent_associated_token_account(
             self.wallet.pubkey,
@@ -234,6 +238,8 @@ class TokenBuyer(Trader):
             SystemAddresses.TOKEN_PROGRAM
         )
 
+        logger.info(f"_send_buy_transaction: Idempotent create ATA instruction prepared.")
+
         # Prepare buy instruction data
         token_amount_raw = int(token_amount * 10**TOKEN_DECIMALS)
         data = (
@@ -241,8 +247,12 @@ class TokenBuyer(Trader):
             + struct.pack("<Q", token_amount_raw)
             + struct.pack("<Q", max_amount_lamports)
         )
+
+        logger.info(f"_send_buy_transaction: Buy instruction data prepared.")
+
         buy_ix = Instruction(PumpAddresses.PROGRAM, data, accounts)
 
+        logger.info(f"_send_buy_transaction: Sending buy instruction...")
         try:
             return await self.client.build_and_send_transaction(
                 [idempotent_ata_ix, buy_ix],
