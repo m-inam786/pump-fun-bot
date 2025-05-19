@@ -14,6 +14,7 @@ from aiohttp import ClientSession
 from core.curve import BondingCurveManager
 from utils.logger import get_logger
 from utils.serializer import PumpFunSerializer
+from utils.sol_to_usd_converter import SolToUsdConverter
 from .shared_websocket_listener import SharedWebsocketListener
 
 logger = get_logger(__name__)
@@ -28,13 +29,15 @@ class PriceListener:
     def __init__(self, 
                  shared_listener: SharedWebsocketListener, # Use 'Any' or forward reference 'SharedWebsocketListener'
                  curve_manager: BondingCurveManager, 
-                 mint: Pubkey):
+                 mint: Pubkey,
+                 sol_to_usd_converter: SolToUsdConverter):
         """Initialize price listener.
 
         Args:
             shared_listener: An instance of SharedWebsocketListener.
             curve_manager: Bonding curve manager for price calculations.
             mint: The mint Pubkey of the token to monitor.
+            sol_to_usd_converter: Converter to get SOL price in USD
         """
         self.shared_listener = shared_listener
         self.curve_manager = curve_manager
@@ -42,8 +45,7 @@ class PriceListener:
         self.serializer = PumpFunSerializer()
         self.is_monitoring = False
         self._price_callback: Optional[Callable[[float], None]] = None
-        self.sol_price_usd = Decimal('140')
-        self.update_sol_price_task = asyncio.create_task(self._update_sol_price())
+        self.sol_to_usd_converter = sol_to_usd_converter
         self.stop_event = asyncio.Event()
 
     async def start_monitoring(
@@ -77,26 +79,6 @@ class PriceListener:
         #         logger.warning(f"Could not fetch initial curve state for mint {self.mint}")
         # except Exception as e:
         #     logger.error(f"Failed to get initial price for {self.mint}: {e}")
-    
-    async def _update_sol_price(self):
-        while not self.stop_event.is_set():
-            self.sol_price_usd = await self._get_solana_price_usd()
-            await asyncio.sleep(480)  # Update every 8 minutes instead of every 1000 seconds
-
-    async def _get_solana_price_usd(self):
-        try:
-            async with ClientSession() as session:
-                async with session.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd') as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        price = data['solana']['usd']
-                        return Decimal(str(price))
-                    else:
-                        logger.warning(f"Failed to get Solana price from Coingecko: HTTP {response.status}")
-                        return self.sol_price_usd
-        except Exception as e:
-            logger.warning(f"Failed to get Solana price from Coingecko: {str(e)}")
-            return self.sol_price_usd
 
     async def stop_monitoring(self) -> None:
         """Stop monitoring price changes."""
@@ -177,9 +159,10 @@ class PriceListener:
                                 vtr = Decimal(vtr_str) / Decimal('1e6')  # Tokens have 6 decimals
                                 
                                 price = self._compute_price(vsr, vtr)
+                                usd_price = self.sol_to_usd_converter.convert_sol_to_usd(price)
                                 
                                 # show price in SOL and USD in scientific notation
-                                logger.info(f"Price update for {self.mint}: {price:.8f} SOL ({price * self.sol_price_usd:.2e} USD)")
+                                logger.info(f"Price update for {self.mint}: {price:.8f} SOL (${usd_price:.2e} USD)")
                                 if self._price_callback: # Check again, could have been stopped concurrently
                                    await self._price_callback(float(price)) # Await if callback is async
                                 return # Processed this mint's update
@@ -211,8 +194,3 @@ class PriceListener:
         if vtr == Decimal('0'): # Compare with Decimal
             return Decimal('0')
         return vsr / vtr
-
-# Lines below this point were related to the old standalone PriceListener
-# and its WebSocket management, which are now removed.
-# All connection logic, subscription, unsubscription, retries,
-# _listen_for_price_changes, etc., are handled by SharedWebsocketListener. 

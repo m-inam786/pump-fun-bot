@@ -12,6 +12,7 @@ from core.pubkeys import LAMPORTS_PER_SOL, TOKEN_DECIMALS
 from core.wallet import Wallet
 from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
+from utils.sol_to_usd_converter import SolToUsdConverter
 from trading.seller import TokenSeller
 from utils.logger import get_logger
 from decimal import Decimal
@@ -33,10 +34,12 @@ class TrailingTokenSeller(TokenSeller):
         curve_manager: BondingCurveManager,
         priority_fee_manager: PriorityFeeManager,
         shared_listener: 'SharedWebsocketListener',
+        sol_to_usd_converter: SolToUsdConverter,
         slippage: float = 0.25,
         max_retries: int = 5,
         trailing_stop_percentage: float = 0.15,  # 15% trailing stop
         take_profit_percentage: float = 0.50,    # 50% take profit
+        percent_sell_amount: float = 1.0,        # 100% of tokens to sell by default
         check_interval: float = 1.0,             # Only used as fallback if WebSocket fails
         stagnation_timeout: int = 15,            # Seconds of no price change before selling
         balance_fetch_retries: int = 5,          # Retries for fetching token balance
@@ -54,6 +57,7 @@ class TrailingTokenSeller(TokenSeller):
             max_retries: Maximum number of retry attempts
             trailing_stop_percentage: Trailing stop percentage (0.15 = 15%)
             take_profit_percentage: Take profit percentage (0.50 = 50%)
+            percent_sell_amount: Percentage of tokens to sell at take profit (1.0 = 100%)
             check_interval: Price check interval in seconds (fallback only)
             stagnation_timeout: Seconds of no price change before selling
             balance_fetch_retries: Number of retries for fetching token balance
@@ -65,11 +69,13 @@ class TrailingTokenSeller(TokenSeller):
         self.shared_listener = shared_listener
         self.trailing_stop_percentage = trailing_stop_percentage
         self.take_profit_percentage = take_profit_percentage
+        self.percent_sell_amount = percent_sell_amount
         self.check_interval = check_interval
         self.stagnation_timeout = stagnation_timeout
         self.balance_fetch_retries = balance_fetch_retries
         self.balance_fetch_delay = balance_fetch_delay
-        
+        self.sol_to_usd_converter = sol_to_usd_converter
+
         self.price_listener_instance: Optional[PriceListener] = None
         self.use_websocket = shared_listener is not None
         self._sell_in_progress = asyncio.Lock()  # Add a lock to prevent multiple simultaneous sells
@@ -197,7 +203,8 @@ class TrailingTokenSeller(TokenSeller):
                 self.price_listener_instance = PriceListener(
                     shared_listener=self.shared_listener, 
                     curve_manager=self.curve_manager, 
-                    mint=token_info.mint
+                    mint=token_info.mint,
+                    sol_to_usd_converter=self.sol_to_usd_converter
                 )
                 
                 # Define the price update callback
@@ -237,7 +244,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check take profit target
                             elif price_decimal >= take_profit_target:
                                 logger.info(f"Take profit target reached at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True)
                                 result_event.set()
                         else:
                             # Original float-based logic
@@ -263,7 +270,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check take profit target
                             elif price >= take_profit_target:
                                 logger.info(f"Take profit target reached at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True)
                                 result_event.set()
                     finally:
                         # Always release the lock when done
@@ -408,7 +415,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                                    return await self._execute_sell(token_info, token_balance, float(current_price), is_take_profit=True)
                                 finally:
                                     self._sell_in_progress.release()
                     else:
@@ -462,7 +469,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, current_price)
+                                    return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=True)
                                 finally:
                                     self._sell_in_progress.release()
 
@@ -493,7 +500,7 @@ class TrailingTokenSeller(TokenSeller):
             return False
 
     async def _execute_sell(
-        self, token_info: TokenInfo, token_balance: int, current_price: float
+        self, token_info: TokenInfo, token_balance: int, current_price: float, is_take_profit: bool = False
     ) -> TradeResult:
         """Execute the sell transaction.
 
@@ -525,7 +532,17 @@ class TrailingTokenSeller(TokenSeller):
             logger.warning(f"Failed to verify token balance before selling: {e!s}")
             # Continue with the original token_balance
 
-        token_balance_decimal = token_balance / 10**9  # TOKEN_DECIMALS
+        # Check if this is a take profit trigger
+        if is_take_profit:
+            # Calculate the sell amount based on percent_sell_amount
+            sell_amount = int(token_balance * self.percent_sell_amount)
+            logger.info(f"Take profit reached - selling {self.percent_sell_amount * 100}% of tokens ({sell_amount / 10**TOKEN_DECIMALS})")
+        else:
+            # For trailing stop or stagnation, sell the entire amount
+            sell_amount = token_balance
+            logger.info(f"Trailing stop or stagnation - selling 100% of tokens ({sell_amount / 10**TOKEN_DECIMALS})")
+
+        token_balance_decimal = sell_amount / 10**TOKEN_DECIMALS
         expected_sol_output = token_balance_decimal * current_price
         slippage_factor = 1 - self.slippage
         min_sol_output = int((expected_sol_output * slippage_factor) * LAMPORTS_PER_SOL)
@@ -539,7 +556,7 @@ class TrailingTokenSeller(TokenSeller):
         tx_signature = await self._send_sell_transaction(
             token_info,
             associated_token_account,
-            token_balance,
+            sell_amount,
             min_sol_output,
         )
 
@@ -547,12 +564,16 @@ class TrailingTokenSeller(TokenSeller):
 
         if success:
             logger.info(f"Sell transaction confirmed: {tx_signature}")
-            return TradeResult(
+            # Store whether this was a partial sell due to take profit
+            result = TradeResult(
                 success=True,
                 tx_signature=tx_signature,
                 amount=token_balance_decimal,
                 price=current_price,
             )
+            result.is_partial = is_take_profit
+            result.percent_sold = self.percent_sell_amount if is_take_profit else 1.0
+            return result
         else:
             return TradeResult(
                 success=False,

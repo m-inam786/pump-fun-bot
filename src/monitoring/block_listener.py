@@ -5,11 +5,13 @@ WebSocket monitoring for pump.fun tokens.
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from typing import Optional
 
 import websockets
 from solders.pubkey import Pubkey
 
 from monitoring.base_listener import BaseTokenListener
+from monitoring.developer_manager import DeveloperManager
 from monitoring.block_event_processor import PumpEventProcessor
 from trading.base import TokenInfo
 from utils.logger import get_logger
@@ -20,13 +22,20 @@ logger = get_logger(__name__)
 class BlockListener(BaseTokenListener):
     """WebSocket listener for pump.fun token creation events using blockSubscribe."""
 
-    def __init__(self, wss_endpoint: str, pump_program: Pubkey):
+    def __init__(
+        self, 
+        wss_endpoint: str, 
+        pump_program: Pubkey,
+        developer_manager: Optional[DeveloperManager] = None
+    ):
         """Initialize token listener.
 
         Args:
             wss_endpoint: WebSocket endpoint URL
             pump_program: Pump.fun program address
+            developer_manager: Optional manager for developer whitelist
         """
+        super().__init__(developer_manager)
         self.wss_endpoint = wss_endpoint
         self.pump_program = pump_program
         self.event_processor = PumpEventProcessor(pump_program)
@@ -61,23 +70,18 @@ class BlockListener(BaseTokenListener):
                                 f"New token detected: {token_info.name} ({token_info.symbol})"
                             )
 
-                            if match_string and not (
-                                match_string.lower() in token_info.name.lower()
-                                or match_string.lower() in token_info.symbol.lower()
-                            ):
-                                logger.info(
-                                    f"Token does not match filter '{match_string}'. Skipping..."
-                                )
+                            # Check with creator_address if provided
+                            if creator_address is not None and str(token_info.user) != creator_address:
                                 continue
 
-                            if (
-                                creator_address
-                                and str(token_info.user) != creator_address
-                            ):
-                                logger.info(
-                                    f"Token not created by {creator_address}. Skipping..."
-                                )
+                            # Use the base class method to check if we should process this token
+                            if not await self.should_process_token(str(token_info.user)):
                                 continue
+
+                            # If using developer manager and no specific creator_address was provided,
+                            # mark this developer as sniped to prevent duplicate processing
+                            if self.developer_manager is not None and creator_address is None:
+                                await self.developer_manager.mark_as_sniped(token_info.user)
 
                             await token_callback(token_info)
 

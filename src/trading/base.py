@@ -75,6 +75,8 @@ class TradeResult:
     error_message: str | None = None
     amount: float | None = None
     price: float | None = None
+    is_partial: bool = False
+    percent_sold: float = 1.0
 
 
 class Trader(ABC):
