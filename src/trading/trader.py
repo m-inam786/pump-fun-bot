@@ -803,7 +803,7 @@ class PumpTrader:
             buy_result: The result of the buy operation
         """
         logger.error(
-            f"Failed to buy {token_info.symbol}: {buy_result.error_message}"
+            f"Failed to buy {token_info.symbol} | token address: {str(token_info.mint)} | creator address: {str(token_info.user)} | error: {buy_result.error_message}"
         )
         
         # Send Discord notification for failed buy
@@ -811,7 +811,7 @@ class PumpTrader:
             await notify_error(
                 self.discord_notifier,
                 "Buy Error",
-                f"Failed to buy {token_info.symbol}",
+                f"Failed to buy {token_info.symbol} | token address: {str(token_info.mint)} | creator address: {str(token_info.user)}",
                 f"Details: {buy_result.error_message}"
             )
         

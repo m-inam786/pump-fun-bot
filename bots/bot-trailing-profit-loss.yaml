@@ -25,7 +25,7 @@ trade:
   
   # Trailing profit/loss settings
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.15 = 15%)
+  trailing_stop_percentage: 0.99 # Trailing stop percentage (0.15 = 15%)
   take_profit_percentage: 0.30 # Take profit percentage (0.30 = 30%)
   percent_sell_amount: 0.80 # Percentage of tokens to sell at take profit (0.80 = 80%). Only applies at take profit; trailing stop sells 100% of tokens.
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
@@ -34,15 +34,15 @@ trade:
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
   # 10M tokens
-  extreme_fast_token_amount: 10000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 15000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 10000_0000 # Base fee in microlamports
+  fixed_amount: 1000_0000 # Base fee in microlamports
   extra_percentage: 0.0
-  hard_cap: 10000_00000
+  hard_cap: 1000_0000
 
 # Developer manager configuration
 developer_manager:
