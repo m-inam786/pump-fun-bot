@@ -19,7 +19,7 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.01 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.8 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
@@ -33,15 +33,16 @@ trade:
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  extreme_fast_token_amount: 10000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  # 10M tokens
+  extreme_fast_token_amount: 10000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 200_000 # Base fee in microlamports
+  fixed_amount: 10000_0000 # Base fee in microlamports
   extra_percentage: 0.0
-  hard_cap: 200_000
+  hard_cap: 10000_00000
 
 # Developer manager configuration
 developer_manager:
