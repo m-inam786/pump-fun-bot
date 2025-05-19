@@ -21,6 +21,8 @@ from core.pubkeys import (
 from core.wallet import Wallet
 from trading.base import TokenInfo, Trader, TradeResult
 from utils.logger import get_logger
+from utils.serializer import PumpFunSerializer
+from decimal import Decimal
 
 logger = get_logger(__name__)
 
@@ -64,6 +66,7 @@ class TokenBuyer(Trader):
         self.max_retries = max_retries
         self.extreme_fast_mode = extreme_fast_mode
         self.extreme_fast_token_amount = extreme_fast_token_amount
+        self.serializer = PumpFunSerializer()
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute buy operation.
@@ -82,7 +85,7 @@ class TokenBuyer(Trader):
                 # Skip the wait and directly calculate the amount
                 token_amount = self.extreme_fast_token_amount
                 token_price_sol = self.amount / token_amount
-                #logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
+                logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
             else:
                 # Regular behavior with RPC call
                 curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
@@ -96,6 +99,13 @@ class TokenBuyer(Trader):
                 token_info.mint
             )
 
+            logger.info(
+                f"Buying {token_amount} tokens at {token_price_sol} SOL per token"
+            )
+            logger.info(
+                f"Total cost: {self.amount} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL} SOL)"
+            )
+
             tx_signature = await self._send_buy_transaction(
                 token_info,
                 associated_token_account,
@@ -103,16 +113,46 @@ class TokenBuyer(Trader):
                 max_amount_lamports,
             )
 
-            logger.info(
-                f"Buying {token_amount:.6f} tokens at {token_price_sol:.8f} SOL per token"
-            )
-            logger.info(
-                f"Total cost: {self.amount:.6f} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL:.6f} SOL)"
-            )
+            logger.info(f"Buy transaction sent: {tx_signature}")
 
-            success = await self.client.confirm_transaction(tx_signature)
+            tx_details = await self.client.confirm_transaction(tx_signature)
 
-            if success:
+            if tx_details:
+                # parse tx_details to get the amount of tokens bought
+                for log_entry in tx_details.transaction.meta.log_messages:
+                    if "Program data:" in log_entry:
+                        try:
+                            idx = log_entry.find("Program data: ")
+                            raw_data = log_entry[idx + len("Program data: "):]
+                            
+                            # Ensure raw_data is a string and matches expected prefix
+                            if isinstance(raw_data, str) and raw_data.startswith("vdt"):
+                                parsed_data = self.serializer.parse_transaction_data(raw_data)
+                            else:
+                                # logger.debug(f"Skipping non-vdt program data: {raw_data[:50]}...")
+                                continue 
+                            
+                            if "virtual_sol_reserves" in parsed_data and "virtual_token_reserves" in parsed_data:
+                                try:
+                                    # Ensure these are strings before creating Decimal
+                                    if not isinstance(parsed_data["virtual_sol_reserves"], str) or not isinstance(parsed_data["virtual_token_reserves"], str):
+                                        logger.warning(f"Reserve values are not strings for mint {self.mint}. VSR: {type(parsed_data['virtual_sol_reserves'])}, VTR: {type(parsed_data['virtual_token_reserves'])}")
+                                        continue
+
+                                    vsr_str = parsed_data["virtual_sol_reserves"]
+                                    vtr_str = parsed_data["virtual_token_reserves"]
+                                    
+                                    vsr = Decimal(vsr_str) / Decimal('1e9')  # SOL has 9 decimals
+                                    vtr = Decimal(vtr_str) / Decimal('1e6')  # Tokens have 6 decimals
+                                    
+                                    token_price_sol = vsr / vtr
+                                    logger.info(f"Token price from tx details: {token_price_sol:.8f} SOL")
+
+                                except ValueError as ve:
+                                    logger.error(f"ValueError converting reserves to Decimal for mint {self.mint}: {ve}. Data: {parsed_data}")
+                        except Exception as e:
+                            logger.error(f"Error calculating price from parsed data for mint {self.mint}: {e}. Data: {parsed_data}")
+                
                 logger.info(f"Buy transaction confirmed: {tx_signature}")
                 return TradeResult(
                     success=True,
@@ -151,6 +191,8 @@ class TokenBuyer(Trader):
         Raises:
             Exception: If transaction fails after all retries
         """
+        logger.info(f"_send_buy_transaction: Starting buy transaction function for {token_info.symbol}...")
+        
         accounts = [
             AccountMeta(
                 pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False
@@ -186,6 +228,8 @@ class TokenBuyer(Trader):
             ),
         ]
 
+        logger.info(f"_send_buy_transaction: Preparing idempotent create ATA instruction...")
+        
         # Prepare idempotent create ATA instruction: it will not fail if ATA already exists
         idempotent_ata_ix = create_idempotent_associated_token_account(
             self.wallet.pubkey,
@@ -194,6 +238,8 @@ class TokenBuyer(Trader):
             SystemAddresses.TOKEN_PROGRAM
         )
 
+        logger.info(f"_send_buy_transaction: Idempotent create ATA instruction prepared.")
+
         # Prepare buy instruction data
         token_amount_raw = int(token_amount * 10**TOKEN_DECIMALS)
         data = (
@@ -201,8 +247,12 @@ class TokenBuyer(Trader):
             + struct.pack("<Q", token_amount_raw)
             + struct.pack("<Q", max_amount_lamports)
         )
+
+        logger.info(f"_send_buy_transaction: Buy instruction data prepared.")
+
         buy_ix = Instruction(PumpAddresses.PROGRAM, data, accounts)
 
+        logger.info(f"_send_buy_transaction: Sending buy instruction...")
         try:
             return await self.client.build_and_send_transaction(
                 [idempotent_ata_ix, buy_ix],

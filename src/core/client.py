@@ -195,7 +195,7 @@ class SolanaClient:
 
     async def confirm_transaction(
         self, signature: str, commitment: str = "confirmed"
-    ) -> bool:
+    ) -> bool | None:
         """Wait for transaction confirmation.
 
         Args:
@@ -207,11 +207,45 @@ class SolanaClient:
         """
         client = await self.get_client()
         try:
+            # First confirm the transaction was processed
             await client.confirm_transaction(signature, commitment=commitment, sleep_seconds=1)
-            return True
+            
+            # Then check if transaction was actually successful
+            response = await client.get_transaction(signature, commitment=commitment)
+            
+            # A transaction might be confirmed but still failed during execution
+            if response.value is None:
+                logger.error(f"Transaction {signature} could not be found")
+                return None
+            
+            # Check if transaction was successful
+            if response.value.transaction.meta and response.value.transaction.meta.err:
+                error_info = response.value.transaction.meta.err
+                
+                # Log the raw error information
+                logger.error(f"Transaction {signature} failed with error: {error_info}")
+                
+                # For more detailed debugging, log the full transaction info
+                try:
+                    # Extract more error details from logs if available
+                    if hasattr(response.value.transaction.meta, 'log_messages') and response.value.transaction.meta.log_messages:
+                        logs = response.value.transaction.meta.log_messages
+                        error_logs = [log for log in logs if "Error" in log or "error" in log or "failed" in log or "Failed" in log]
+                        if error_logs:
+                            logger.error(f"Error details from logs: {error_logs}")
+                        else:
+                            logger.error(f"All logs: {logs}")
+                
+                except Exception as log_error:
+                    logger.error(f"Error extracting detailed error information: {log_error}")
+                
+                return None
+
+            return response.value
+        
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")
-            return False
+            return None
 
     async def post_rpc(self, body: dict[str, Any]) -> dict[str, Any] | None:
         """

@@ -1,0 +1,70 @@
+# This file defines a bot configuration with trailing profit/loss enabled
+# This strategy allows capturing a higher percentage of price movement by setting a trailing stop
+
+# Bot identification and connection settings
+name: "bot-trailing-pnl"
+env_file: ".env"
+rpc_endpoint: "${SOLANA_NODE_RPC_ENDPOINT}"
+wss_endpoint: "${SOLANA_NODE_WSS_ENDPOINT}"
+private_key: "${SOLANA_PRIVATE_KEY}"
+
+enabled: true # Set to true to enable this bot
+separate_process: false # Run in a separate process
+
+# Geyser configuration (fastest method for getting updates)
+geyser:
+  endpoint: "${GEYSER_ENDPOINT}"
+  api_token: "${GEYSER_API_TOKEN}"
+  auth_type: "x-token" # or "basic"
+
+# Trading parameters
+trade:
+  buy_amount: 0.08 # Amount of SOL to spend when buying (in SOL)
+  buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
+  sell_slippage: 0.3 # Slippage tolerance for sells
+  
+  # Trailing profit/loss settings
+  use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
+  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.15 = 15%)
+  take_profit_percentage: 0.15 # Take profit percentage (0.50 = 50%) 
+  price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
+  stagnation_timeout: 40 # Seconds of no price change before selling
+
+  # EXTREME FAST mode configuration
+  extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
+  extreme_fast_token_amount: 100000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+
+# Priority fee configuration
+priority_fees:
+  enable_dynamic: false
+  enable_fixed: true
+  fixed_amount: 10000_0000 # Base fee in microlamports
+  extra_percentage: 0.0
+  hard_cap: 10000_00000
+
+# Filters for token selection
+filters:
+  match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
+  bro_address: null # Only trade tokens created by this user address (null = all creators)
+  listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
+  max_token_age: 0.000001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
+  marry_mode: false # Set to false to allow selling
+  yolo_mode: true # Trade continuously
+
+# Retry and timeout settings
+retries:
+  max_attempts: 3
+  wait_after_creation: 5 # Reduced waiting time after token creation
+  wait_after_buy: 15 # Only applicable if trailing stop is not used
+  wait_before_new_token: 2
+
+# Timing settings
+timing:
+  max_token_age: 0.001 # Maximum token age in seconds (same as in filters)
+  token_wait_timeout: 60 # Increased timeout to allow the bot more time to find tokens
+
+# Token and account management
+cleanup:
+  mode: "after_sell" # Clean up after each sell
+  force_close_with_burn: false
+  with_priority_fee: true 
