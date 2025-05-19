@@ -81,7 +81,7 @@ class BlockListener(BaseTokenListener):
                             # If using developer manager and no specific creator_address was provided,
                             # mark this developer as sniped to prevent duplicate processing
                             if self.developer_manager is not None and creator_address is None:
-                                await self.developer_manager.mark_as_sniped(token_info.user)
+                                await self.developer_manager.mark_as_sniped(str(token_info.user))
 
                             await token_callback(token_info)
 
