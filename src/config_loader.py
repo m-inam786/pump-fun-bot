@@ -19,13 +19,32 @@ CONFIG_VALIDATION_RULES = [
     ("priority_fees.extra_percentage", float, 0, 1, "priority_fees.extra_percentage must be between 0 and 1"),
     ("priority_fees.hard_cap", int, 0, float('inf'), "priority_fees.hard_cap must be a non-negative integer"),
     ("retries.max_attempts", int, 0, 100, "retries.max_attempts must be between 0 and 100"),
-    ("filters.max_token_age", (int, float), 0, float('inf'), "filters.max_token_age must be a non-negative number")
+    ("filters.max_token_age", (int, float), 0, float('inf'), "filters.max_token_age must be a non-negative number"),
+    # Developer manager validation rules
+    ("developer_manager.refresh_interval", int, 10, float('inf'), "developer_manager.refresh_interval must be at least 10 seconds"),
+    ("developer_manager.max_developers", int, 10, 10000, "developer_manager.max_developers must be between 10 and 10000"),
+    ("developer_manager.max_age_days", int, 1, 30, "developer_manager.max_age_days must be between 1 and 30 days"),
 ]
 
 # Valid values for enum-like fields
 VALID_VALUES = {
     "filters.listener_type": ["logs", "blocks", "geyser"],
-    "cleanup.mode": ["disabled", "on_fail", "after_sell", "post_session"]
+    "cleanup.mode": ["disabled", "on_fail", "after_sell", "post_session"],
+    "geyser.auth_type": ["x-token", "basic"]
+}
+
+# Conditional required fields - if a feature is enabled, these fields are required
+CONDITIONAL_REQUIRED = {
+    "developer_manager.enabled": {
+        True: [
+            "developer_manager.db_host",
+            "developer_manager.db_port",
+            "developer_manager.db_name",
+            "developer_manager.db_user",
+            "developer_manager.db_password",
+            "developer_manager.db_query_file",
+        ]
+    }
 }
 
 
@@ -107,6 +126,23 @@ def get_nested_value(config: dict, path: str) -> Any:
         value = value[key]
     return value
 
+def get_nested_value_safe(config: dict, path: str, default=None) -> Any:
+    """
+    Get a nested value from the configuration using dot notation, with a default fallback.
+    
+    Args:
+        config: Configuration dictionary
+        path: Path to the value using dot notation (e.g., "trade.buy_amount")
+        default: Default value to return if path doesn't exist
+        
+    Returns:
+        The value at the specified path or the default value
+    """
+    try:
+        return get_nested_value(config, path)
+    except ValueError:
+        return default
+
 def validate_config(config: dict) -> None:
     """
     Validate the configuration against defined rules.
@@ -117,9 +153,11 @@ def validate_config(config: dict) -> None:
     Raises:
         ValueError: If the configuration is invalid
     """
+    # Validate required fields
     for field in REQUIRED_FIELDS:
         get_nested_value(config, field)
     
+    # Validate field types and ranges
     for path, expected_type, min_val, max_val, error_msg in CONFIG_VALIDATION_RULES:
         try:
             value = get_nested_value(config, path)
@@ -134,7 +172,7 @@ def validate_config(config: dict) -> None:
             # Re-raise if it's our own error
             if str(e).startswith(("Type error:", "Range error:")):
                 raise
-            # Otherwise, the field might be missing
+            # Otherwise, the field might be missing - this is ok for optional fields
             continue
     
     # Validate enum-like fields
@@ -144,7 +182,7 @@ def validate_config(config: dict) -> None:
             if value not in valid_values:
                 raise ValueError(f"{path} must be one of {valid_values}")
         except ValueError:
-            # Skip if the field is missing
+            # Skip if the field is missing (optional)
             continue
     
     # Cannot enable both dynamic and fixed priority fees
@@ -155,6 +193,38 @@ def validate_config(config: dict) -> None:
             raise ValueError("Cannot enable both dynamic and fixed priority fees simultaneously")
     except ValueError:
         # Skip if one of the fields is missing
+        pass
+    
+    # Validate conditional required fields
+    for condition_path, requirements in CONDITIONAL_REQUIRED.items():
+        try:
+            condition_value = get_nested_value(config, condition_path)
+            if condition_value in requirements:
+                required_fields = requirements[condition_value]
+                for field in required_fields:
+                    try:
+                        get_nested_value(config, field)
+                    except ValueError:
+                        raise ValueError(f"Field '{field}' is required when '{condition_path}' is {condition_value}")
+        except ValueError as e:
+            # If it's our own specific error, re-raise
+            if str(e).startswith("Field '"):
+                raise
+            # Otherwise, the condition field might be missing
+            continue
+    
+    # Developer manager specific validations
+    try:
+        dev_manager_enabled = get_nested_value(config, "developer_manager.enabled")
+        if dev_manager_enabled:
+            # If developer manager is enabled, bro_address should be null
+            bro_address = get_nested_value_safe(config, "filters.bro_address")
+            if bro_address is not None:
+                raise ValueError("filters.bro_address must be null when developer_manager is enabled")
+    except ValueError as e:
+        # Skip if developer_manager.enabled is missing
+        if str(e).startswith("filters.bro_address"):
+            raise
         pass
 
 def print_config_summary(config: dict) -> None:
@@ -179,6 +249,16 @@ def print_config_summary(config: dict) -> None:
         print("  - Dynamic fees enabled")
     elif fees.get('enable_fixed'):
         print(f"  - Fixed fee: {fees.get('fixed_amount', 'not configured')} microlamports")
+    
+    # Developer manager summary
+    dev_manager = config.get('developer_manager', {})
+    if dev_manager.get('enabled'):
+        print("Developer manager:")
+        print(f"  - Enabled: Yes")
+        print(f"  - Database: {dev_manager.get('db_name', 'not configured')} on {dev_manager.get('db_host', 'not configured')}")
+        print(f"  - Max developers: {dev_manager.get('max_developers', 1000)}")
+        print(f"  - Refresh interval: {dev_manager.get('refresh_interval', 1800)} seconds")
+        print(f"  - Max age: {dev_manager.get('max_age_days', 1)} days")
     
     print("Configuration loaded successfully!")
 

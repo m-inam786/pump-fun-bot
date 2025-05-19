@@ -19,35 +19,57 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.08 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.01 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
   # Trailing profit/loss settings
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
   trailing_stop_percentage: 0.10 # Trailing stop percentage (0.15 = 15%)
-  take_profit_percentage: 0.15 # Take profit percentage (0.50 = 50%) 
+  take_profit_percentage: 0.30 # Take profit percentage (0.30 = 30%)
+  percent_sell_amount: 0.80 # Percentage of tokens to sell at take profit (0.80 = 80%). Only applies at take profit; trailing stop sells 100% of tokens.
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
-  stagnation_timeout: 40 # Seconds of no price change before selling
+  stagnation_timeout: 60 # Seconds of no price change before selling
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  extreme_fast_token_amount: 100000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 10000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 10000_0000 # Base fee in microlamports
+  fixed_amount: 200_000 # Base fee in microlamports
   extra_percentage: 0.0
-  hard_cap: 10000_00000
+  hard_cap: 200_000
+
+# Developer manager configuration
+developer_manager:
+  enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
+  db_host: "${PG_HOST}" # PostgreSQL host
+  db_port: "${PG_PORT}" # PostgreSQL port
+  db_name: "${PG_DATABASE}" # PostgreSQL database name
+  db_user: "${PG_USER}" # PostgreSQL username
+  db_password: "${PG_PASSWORD}" # PostgreSQL password
+  db_query_file: "data/developer_query/query.sql"
+  refresh_interval: 1800 # Refresh interval in seconds (30 minutes)
+  max_developers: 1000 # Maximum number of developers to track
+  max_age_days: 1 # Maximum age of developers in days
+  sniped_devs_file: "data/developer_list/sniped_developers.json" # File to store sniped developers
+
+# Discord notification settings
+discord:
+  webhook_url: "https://discord.com/api/webhooks/1373954827947606117/plJ6-YZbrX2lpquGfoDB46AoE6RABMTASouhXyk65_hobCbkVEhTIRwzCV9wq3ntz7gV"
+  queue_size: 1000
+  worker_count: 1
+  retry_limit: 3 
 
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
-  bro_address: null # Only trade tokens created by this user address (null = all creators)
+  bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
   listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
-  max_token_age: 0.000001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
+  max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
 
@@ -60,11 +82,11 @@ retries:
 
 # Timing settings
 timing:
-  max_token_age: 0.001 # Maximum token age in seconds (same as in filters)
+  max_token_age: 0.0005 # Maximum token age in seconds (same as in filters)
   token_wait_timeout: 60 # Increased timeout to allow the bot more time to find tokens
 
 # Token and account management
 cleanup:
   mode: "after_sell" # Clean up after each sell
   force_close_with_burn: false
-  with_priority_fee: true 
+  with_priority_fee: false

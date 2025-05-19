@@ -4,15 +4,18 @@ Geyser monitoring for pump.fun tokens.
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Optional
 
 import grpc
 from solders.pubkey import Pubkey
 
 from geyser.generated import geyser_pb2, geyser_pb2_grpc
 from monitoring.base_listener import BaseTokenListener
+from monitoring.developer_manager import DeveloperManager
 from monitoring.geyser_event_processor import GeyserEventProcessor
 from trading.base import TokenInfo
 from utils.logger import get_logger
+import time
 
 logger = get_logger(__name__)
 
@@ -20,7 +23,14 @@ logger = get_logger(__name__)
 class GeyserListener(BaseTokenListener):
     """Geyser listener for pump.fun token creation events."""
 
-    def __init__(self, geyser_endpoint: str, geyser_api_token: str, geyser_auth_type: str, pump_program: Pubkey):
+    def __init__(
+        self, 
+        geyser_endpoint: str, 
+        geyser_api_token: str, 
+        geyser_auth_type: str, 
+        pump_program: Pubkey,
+        developer_manager: Optional[DeveloperManager] = None
+    ):
         """Initialize token listener.
         
         Args:
@@ -28,7 +38,9 @@ class GeyserListener(BaseTokenListener):
             geyser_api_token: API token for authentication
             geyser_auth_type: authentication type ('x-token' or 'basic')
             pump_program: Pump.fun program address
+            developer_manager: Optional manager for developer whitelist
         """
+        super().__init__(developer_manager)
         self.geyser_endpoint = geyser_endpoint
         self.geyser_api_token = geyser_api_token
         valid_auth_types = {"x-token", "basic"}
@@ -85,34 +97,38 @@ class GeyserListener(BaseTokenListener):
                 
                 logger.info(f"Connected to Geyser endpoint: {self.geyser_endpoint}")
                 logger.info(f"Monitoring for transactions involving program: {self.pump_program}")
-                
+
+                # Warm up the geyser connection
+                warmup_time_secs = 5
+                warmup_time_end = time.time() + warmup_time_secs
+                logger.info(f"Warming up geyser connection for {warmup_time_secs} seconds...")
+
                 try:
                     async for update in stub.Subscribe(iter([request])):
                         token_info = await self._process_update(update)
                         if not token_info:
                             continue
-                            
+
                         logger.info(
                             f"New token detected: {token_info.name} ({token_info.symbol})"
                         )
-    
-                        if match_string and not (
-                            match_string.lower() in token_info.name.lower()
-                            or match_string.lower() in token_info.symbol.lower()
-                        ):
-                            logger.info(
-                                f"Token does not match filter '{match_string}'. Skipping..."
-                            )
+
+                        if time.time() <= warmup_time_end:
+                            logger.info("Geyser connection is warming up | Skipping token handling...")
                             continue
-    
-                        if (
-                            creator_address
-                            and str(token_info.user) != creator_address
-                        ):
-                            logger.info(
-                                f"Token not created by {creator_address}. Skipping..."
-                            )
+                        
+                        # Check with creator_address if provided
+                        if creator_address is not None and str(token_info.user) != creator_address:
                             continue
+
+                        # Use the base class method to check if we should process this token
+                        if not await self.should_process_token(str(token_info.user)):
+                            continue
+
+                        # If using developer manager and no specific creator_address was provided,
+                        # mark this developer as sniped to prevent duplicate processing
+                        if self.developer_manager is not None and creator_address is None:
+                            await self.developer_manager.mark_as_sniped(token_info.user)
     
                         await token_callback(token_info)
                         

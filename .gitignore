@@ -168,3 +168,4 @@ cython_debug/
 #.idea/
 trades/trades.log
 trades/trades.log
+data/developer_list/sniped_developers.json

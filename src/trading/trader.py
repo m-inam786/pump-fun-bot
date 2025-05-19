@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from time import monotonic
 from typing import Optional
-
+from decimal import Decimal
 import uvloop
 from solders.pubkey import Pubkey
 
@@ -24,16 +24,24 @@ from core.priority_fee.manager import PriorityFeeManager
 from core.pubkeys import PumpAddresses
 from core.wallet import Wallet
 from monitoring.block_listener import BlockListener
+from monitoring.developer_manager import DeveloperManager
 from monitoring.geyser_listener import GeyserListener
 from monitoring.logs_listener import LogsListener
 from monitoring.shared_websocket_listener import SharedWebsocketListener
-from monitoring.price_listener import PriceListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
 from trading.trailing_seller import TrailingTokenSeller
 from utils.logger import get_logger
 from core.pubkeys import TOKEN_DECIMALS
+from utils.discord_notifications import (
+    DiscordNotifier,
+    notify_token_buy,
+    notify_token_sell,
+    notify_pnl,
+    notify_error,
+)
+from utils.sol_to_usd_converter import SolToUsdConverter
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -69,6 +77,7 @@ class PumpTrader:
         use_trailing_profit_loss: bool = False,
         trailing_stop_percentage: float = 0.15,
         take_profit_percentage: float = 0.50,
+        percent_sell_amount: float = 1.0,
         price_check_interval: float = 1.0,
         stagnation_timeout: int = 15,
         
@@ -91,8 +100,30 @@ class PumpTrader:
         marry_mode: bool = False,
         yolo_mode: bool = False,
         
+        # Developer manager settings
+        enable_developer_manager: bool = False,
+        db_host: str | None = None,
+        db_port: int | None = None,
+        db_name: str | None = None,
+        db_user: str | None = None,
+        db_password: str | None = None,
+        db_query_file: str | None = None,
+        db_refresh_interval: int = 1800,  # 30 minutes
+        max_developers: int = 1000,
+        developer_age_days: int = 1,
+        sniped_devs_file: str = "data/sniped_developers.json",
+        
         # Concurrency settings
         processor_count: int = 1,
+
+        # Discord notification settings
+        discord_webhook_url: str | None = None,
+        discord_queue_size: int = 1000,
+        discord_worker_count: int = 2,
+        discord_retry_limit: int = 3,
+        
+        # SOL/USD converter settings
+        sol_price_update_interval: int = 480,  # 8 minutes
     ):
         """Initialize the pump trader.
         Args:
@@ -133,12 +164,35 @@ class PumpTrader:
             marry_mode: If True, only buy tokens and skip selling
             yolo_mode: If True, trade continuously
             
+            enable_developer_manager: Whether to enable the developer manager
+            db_host: PostgreSQL host
+            db_port: PostgreSQL port
+            db_name: PostgreSQL database name
+            db_user: PostgreSQL username
+            db_password: PostgreSQL password
+            db_query: SQL query to fetch developers
+            db_refresh_interval: Time between developer list refreshes in seconds
+            max_developers: Maximum number of developers to store in memory
+            developer_age_days: Maximum age of developers in days before removal
+            sniped_devs_file: Path to file for persisting sniped developers
+            
             processor_count: Number of concurrent token processor tasks
+
+            discord_webhook_url: Discord webhook URL for notifications
+            discord_queue_size: Maximum size of the Discord notification queue
+            discord_worker_count: Number of worker threads for Discord notifications
+            discord_retry_limit: Maximum retry attempts for Discord notifications
+            
+            sol_price_update_interval: Time between SOL price updates in seconds
         """
         self.solana_client = SolanaClient(rpc_endpoint)
         self.wallet = Wallet(private_key)
         self.curve_manager = BondingCurveManager(self.solana_client)
         self.shared_websocket_listener = SharedWebsocketListener(wss_endpoint)
+        
+        # Initialize SOL to USD converter
+        self.sol_to_usd_converter = SolToUsdConverter(update_interval=sol_price_update_interval)
+        
         self.priority_fee_manager = PriorityFeeManager(
             client=self.solana_client,
             enable_dynamic_fee=enable_dynamic_priority_fee,
@@ -170,8 +224,10 @@ class PumpTrader:
                 max_retries=max_retries,
                 trailing_stop_percentage=trailing_stop_percentage,
                 take_profit_percentage=take_profit_percentage,
+                percent_sell_amount=percent_sell_amount,
                 check_interval=price_check_interval,
-                stagnation_timeout=stagnation_timeout,  # Pass stagnation timeout for auto-selling
+                stagnation_timeout=stagnation_timeout,
+                sol_to_usd_converter=self.sol_to_usd_converter
             )
             logger.info("Using trailing profit/loss seller with real-time WebSocket monitoring")
             logger.info(f"  Trailing stop: {trailing_stop_percentage * 100:.1f}%")
@@ -186,6 +242,44 @@ class PumpTrader:
                 sell_slippage,
                 max_retries,
             )
+            
+
+        # Discord notification settings
+        self.discord_notifier = None
+        if discord_webhook_url:
+            self.discord_notifier = DiscordNotifier(
+                webhook_url=discord_webhook_url,
+                queue_size=discord_queue_size,
+                worker_count=discord_worker_count,
+                retry_limit=discord_retry_limit,
+            )
+            logger.info("Discord notifications enabled")
+            logger.info(f"  Queue size: {discord_queue_size}")
+            logger.info(f"  Worker count: {discord_worker_count}")
+
+        # Initialize the developer manager if enabled
+        self.developer_manager = None
+        if enable_developer_manager:
+            if not all([db_host, db_port, db_name, db_user, db_password, db_query_file]):
+                raise ValueError("Database configuration required when developer manager is enabled")
+                
+            self.developer_manager = DeveloperManager(
+                db_host=db_host,
+                db_port=db_port,
+                db_name=db_name,
+                db_user=db_user,
+                db_password=db_password,
+                db_query=db_query_file,
+                refresh_interval=db_refresh_interval,
+                max_developers=max_developers,
+                max_age_days=developer_age_days,
+                persisted_whitelist_filepath=sniped_devs_file,
+                discord_notifier=self.discord_notifier,
+            )
+            logger.info("Developer manager enabled")
+            logger.info(f"  Max developers: {max_developers}")
+            logger.info(f"  Developer age limit: {developer_age_days} days")
+            logger.info(f"  Refresh interval: {db_refresh_interval} seconds")
         
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()
@@ -197,14 +291,23 @@ class PumpTrader:
                 geyser_endpoint, 
                 geyser_api_token,
                 geyser_auth_type, 
-                PumpAddresses.PROGRAM
+                PumpAddresses.PROGRAM,
+                self.developer_manager
             )
             logger.info("Using Geyser listener for token monitoring")
         elif listener_type == "logs":
-            self.token_listener = LogsListener(wss_endpoint, PumpAddresses.PROGRAM)
+            self.token_listener = LogsListener(
+                wss_endpoint, 
+                PumpAddresses.PROGRAM,
+                self.developer_manager
+            )
             logger.info("Using logsSubscribe listener for token monitoring")
         else:
-            self.token_listener = BlockListener(wss_endpoint, PumpAddresses.PROGRAM)
+            self.token_listener = BlockListener(
+                wss_endpoint, 
+                PumpAddresses.PROGRAM,
+                self.developer_manager
+            )
             logger.info("Using blockSubscribe listener for token monitoring")
             
         # Trading parameters
@@ -258,28 +361,26 @@ class PumpTrader:
         logger.info(f"Max token age: {self.max_token_age} seconds")
         logger.info(f"Concurrent processors: {self.processor_count}")
 
+        # Start the shared WebSocket listener
+        await self.shared_websocket_listener.start()
+        
+        # Start the SOL to USD converter
+        await self.sol_to_usd_converter.start()
+        
+        # Start the developer manager if enabled
+        if self.developer_manager:
+            await self.developer_manager.start()
+            
+        # Start the Discord notifier if enabled
+        if self.discord_notifier:
+            await self.discord_notifier.start()
+
+        # Warm up the RPC
         try:
             health_resp = await self.solana_client.get_health()
             logger.info(f"RPC warm-up successful (getHealth passed: {health_resp})")
         except Exception as e:
             logger.warning(f"RPC warm-up failed: {e!s}")
-
-        # Start the shared WebSocket listener
-        await self.shared_websocket_listener.start()
-
-        # Connect the shared WebSocket listener if it's going to be used
-        # (e.g., by TrailingTokenSeller or pre-buy listeners)
-        # if self.shared_websocket_listener: # Check if it exists # REMOVED BLOCK
-        #     try: # REMOVED BLOCK
-        #         logger.info("Attempting to connect shared WebSocket listener...") # REMOVED BLOCK
-        #         await self.shared_websocket_listener.connect() # REMOVED LINE - This was causing the error
-        #         logger.info("Shared WebSocket listener connected successfully.") # REMOVED BLOCK
-        #     except Exception as e: # REMOVED BLOCK
-        #         logger.error(f"Failed to connect shared WebSocket listener: {e!s}. Real-time price features might be affected.") # REMOVED BLOCK
-
-        # The SharedWebsocketListener is now expected to handle its connection
-        # automatically upon instantiation or when its processing loop is started
-        # (e.g., when the first processor is added).
 
         try:
             # Choose operating mode based on yolo_mode
@@ -312,6 +413,12 @@ class PumpTrader:
                     )
                 except Exception as e:
                     logger.error(f"Token listening stopped due to error: {e!s}")
+                    if self.discord_notifier:
+                        await notify_error(
+                            self.discord_notifier,
+                            "Token Listening Error",
+                            f"Token listening stopped due to error: {str(e)}"
+                        )
                 finally:
                     # Cancel all processor tasks
                     for task in self.processor_tasks:
@@ -323,11 +430,69 @@ class PumpTrader:
         
         except Exception as e:
             logger.error(f"Trading stopped due to error: {e!s}")
+            if self.discord_notifier:
+                await notify_error(
+                    self.discord_notifier,
+                    "Trading Error",
+                    f"Trading stopped due to error: {str(e)}"
+                )
         
         finally:
             await self._cleanup_resources()
             logger.info("Pump trader has shut down")
+            
+    async def _cleanup_resources(self) -> None:
+        """Perform cleanup operations before shutting down."""
+        if self.traded_mints:
+            try:
+                logger.info(f"Cleaning up {len(self.traded_mints)} traded token(s)...")
+                await handle_cleanup_post_session(
+                    self.solana_client, 
+                    self.wallet, 
+                    list(self.traded_mints), 
+                    self.priority_fee_manager,
+                    self.cleanup_mode,
+                    self.cleanup_with_priority_fee,
+                    self.cleanup_force_close_with_burn
+                )
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e!s}")
+                if self.discord_notifier:
+                    await notify_error(
+                        self.discord_notifier,
+                        "Cleanup Error",
+                        f"Error cleaning up traded tokens: {str(e)}"
+                    )
+        
+        # Stop all services
+        logger.info("Stopping services...")
+        
+        # Stop SOL/USD converter
+        try:
+            await self.sol_to_usd_converter.stop()
+        except Exception as e:
+            logger.error(f"Error stopping SOL/USD converter: {e!s}")
 
+        # Stop the shared WebSocket listener
+        try:
+            await self.shared_websocket_listener.stop()
+        except Exception as e:
+            logger.error(f"Error stopping WebSocket listener: {e!s}")
+            
+        # Stop the developer manager if running
+        if self.developer_manager:
+            try:
+                await self.developer_manager.stop()
+            except Exception as e:
+                logger.error(f"Error stopping developer manager: {e!s}")
+                
+        # Stop Discord notifier if running
+        if self.discord_notifier:
+            try:
+                await self.discord_notifier.stop()
+            except Exception as e:
+                logger.error(f"Error stopping Discord notifier: {e!s}")
+                
     async def _wait_for_token(self) -> TokenInfo | None:
         """Wait for a single token to be detected.
         
@@ -367,6 +532,13 @@ class PumpTrader:
             return found_token
         except TimeoutError:
             logger.info(f"Timed out after waiting {self.token_wait_timeout}s for a token")
+            if self.discord_notifier:
+                await notify_error(
+                    self.discord_notifier,
+                    "Token Wait Timeout",
+                    f"No suitable token found within {self.token_wait_timeout} seconds",
+                    "The bot will exit as configured for single-token mode."
+                )
             return None
         finally:
             listener_task.cancel()
@@ -374,34 +546,6 @@ class PumpTrader:
                 await listener_task
             except asyncio.CancelledError:
                 pass
-
-    async def _cleanup_resources(self) -> None:
-        """Perform cleanup operations before shutting down."""
-        if self.traded_mints:
-            try:
-                logger.info(f"Cleaning up {len(self.traded_mints)} traded token(s)...")
-                await handle_cleanup_post_session(
-                    self.solana_client, 
-                    self.wallet, 
-                    list(self.traded_mints), 
-                    self.priority_fee_manager,
-                    self.cleanup_mode,
-                    self.cleanup_with_priority_fee,
-                    self.cleanup_force_close_with_burn
-                )
-            except Exception as e:
-                logger.error(f"Error during cleanup: {e!s}")
-                
-        old_keys = {k for k in self.token_timestamps if k not in self.processed_tokens}
-        for key in old_keys:
-            self.token_timestamps.pop(key, None)
-            
-        # Close the shared WebSocket listener
-        if self.shared_websocket_listener and self.shared_websocket_listener.running:
-            logger.info("Closing shared WebSocket listener...")
-            await self.shared_websocket_listener.stop()
-            
-        await self.solana_client.close()
 
     async def _queue_token(
         self, token_info: TokenInfo
@@ -420,6 +564,7 @@ class PumpTrader:
 
             # Record timestamp when token was discovered
             self.token_timestamps[token_key] = monotonic()
+            self.processed_tokens.add(token_key)
 
         await self.token_queue.put(token_info)
         logger.info(f"Queued new token: {token_info.symbol} ({token_info.mint})")
@@ -445,10 +590,14 @@ class PumpTrader:
                 
                 is_processed = False
                 async with self.processed_tokens_lock:
-                    if token_key in self.processed_tokens:
-                        is_processed = True
-                    else:
+                    if token_key not in self.processed_tokens:
+                        # This should not happen as we add to processed_tokens in _queue_token
+                        # But just in case, we add it here
                         self.processed_tokens.add(token_key)
+                    else:
+                        # Check if this token was already processed by this processor
+                        if token_key in self.traded_mints:
+                            is_processed = True
 
                 if is_processed:
                     logger.debug(f"Processor {processor_id}: Token {token_info.symbol} already processed by another processor")
@@ -471,6 +620,12 @@ class PumpTrader:
                 break
             except Exception as e:
                 logger.error(f"Error in token processor {processor_id}: {e!s}")
+                if self.discord_notifier:
+                    await notify_error(
+                        self.discord_notifier,
+                        f"Processor {processor_id} Error",
+                        f"Error processing token: {str(e)}"
+                    )
             finally:
                 self.token_queue.task_done()
                 
@@ -514,6 +669,13 @@ class PumpTrader:
 
         except Exception as e:
             logger.error(f"Error handling token {token_info.symbol}: {e!s}")
+            if self.discord_notifier:
+                await notify_error(
+                    self.discord_notifier,
+                    "Token Processing Error",
+                    f"Error handling token {token_info.symbol}",
+                    f"Details: {str(e)}"
+                )
 
     async def _handle_successful_buy(
         self, token_info: TokenInfo, buy_result: TradeResult
@@ -532,6 +694,18 @@ class PumpTrader:
             buy_result.amount,  # type: ignore
             buy_result.tx_signature,
         )
+        
+        # Send Discord notification for token purchase
+        if self.discord_notifier:
+            await notify_token_buy(
+                self.discord_notifier,
+                token_info.name,
+                str(token_info.mint),
+                buy_result.amount,  # type: ignore
+                buy_result.price,   # type: ignore
+                buy_result.tx_signature,  # type: ignore
+                self.sol_to_usd_converter.convert_sol_to_usd(Decimal(str(buy_result.price * buy_result.amount)))
+            )
         
         async with self.traded_mints_lock:
             self.traded_mints.add(token_info.mint)
@@ -561,6 +735,38 @@ class PumpTrader:
                     sell_result.amount,  # type: ignore
                     sell_result.tx_signature,
                 )
+                
+                # Send Discord notification for token sale
+                if self.discord_notifier:
+                    await notify_token_sell(
+                        self.discord_notifier,
+                        token_info.name,
+                        str(token_info.mint),
+                        sell_result.amount,  # type: ignore
+                        sell_result.price,   # type: ignore
+                        sell_result.tx_signature,  # type: ignore
+                        getattr(sell_result, 'is_partial', False),
+                        getattr(sell_result, 'percent_sold', 1.0),
+                        self.sol_to_usd_converter.convert_sol_to_usd(Decimal(str(sell_result.price * sell_result.amount)))
+                    )
+                    
+                    # Calculate and send PnL notification
+                    if buy_result.price is not None and sell_result.price is not None:
+                        profit_loss = (Decimal(sell_result.price) * Decimal(sell_result.amount)) - (Decimal(buy_result.price) * Decimal(buy_result.amount))
+                        profit_loss_usd = profit_loss * Decimal(self.sol_to_usd_converter.get_current_price())
+                        profit_loss_percent = ((Decimal(sell_result.price) / Decimal(buy_result.price)) - 1) * 100
+                        
+                        await notify_pnl(
+                            self.discord_notifier,
+                            token_info.name,
+                            str(token_info.mint),
+                            buy_result.price,
+                            sell_result.price,
+                            profit_loss,
+                            profit_loss_percent,
+                            profit_loss_usd
+                        )
+                
                 # Close ATA if enabled
                 await handle_cleanup_after_sell(
                     self.solana_client, 
@@ -575,6 +781,15 @@ class PumpTrader:
                 logger.error(
                     f"Failed to sell {token_info.symbol}: {sell_result.error_message}"
                 )
+                
+                # Send Discord notification for failed sell
+                if self.discord_notifier:
+                    await notify_error(
+                        self.discord_notifier,
+                        "Sell Error",
+                        f"Failed to sell {token_info.symbol}",
+                        f"Details: {sell_result.error_message}"
+                    )
         else:
             logger.info("Marry mode enabled. Skipping sell operation.")
 
@@ -590,6 +805,16 @@ class PumpTrader:
         logger.error(
             f"Failed to buy {token_info.symbol}: {buy_result.error_message}"
         )
+        
+        # Send Discord notification for failed buy
+        if self.discord_notifier:
+            await notify_error(
+                self.discord_notifier,
+                "Buy Error",
+                f"Failed to buy {token_info.symbol}",
+                f"Details: {buy_result.error_message}"
+            )
+        
         # Close ATA if enabled
         await handle_cleanup_after_failure(
             self.solana_client, 

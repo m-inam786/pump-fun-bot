@@ -73,6 +73,7 @@ async def start_bot(config_path: str):
         use_trailing_profit_loss=cfg.get("trade", {}).get("use_trailing_profit_loss", False),
         trailing_stop_percentage=cfg.get("trade", {}).get("trailing_stop_percentage", 0.15),
         take_profit_percentage=cfg.get("trade", {}).get("take_profit_percentage", 0.50),
+        percent_sell_amount=cfg.get("trade", {}).get("percent_sell_amount", 1.0),
         price_check_interval=cfg.get("trade", {}).get("price_check_interval", 1.0),
         stagnation_timeout=cfg.get("trade", {}).get("stagnation_timeout", 15),
         
@@ -94,6 +95,25 @@ async def start_bot(config_path: str):
         bro_address=cfg["filters"].get("bro_address"),
         marry_mode=cfg["filters"].get("marry_mode", False),
         yolo_mode=cfg["filters"].get("yolo_mode", False),
+        
+        # Developer manager settings
+        enable_developer_manager=cfg.get("developer_manager", {}).get("enabled", False),
+        db_host=cfg.get("developer_manager", {}).get("db_host"),
+        db_port=cfg.get("developer_manager", {}).get("db_port", 5432),
+        db_name=cfg.get("developer_manager", {}).get("db_name"),
+        db_user=cfg.get("developer_manager", {}).get("db_user"),
+        db_password=cfg.get("developer_manager", {}).get("db_password"),
+        db_query_file=cfg.get("developer_manager", {}).get("db_query_file"),
+        db_refresh_interval=cfg.get("developer_manager", {}).get("refresh_interval", 1800),
+        max_developers=cfg.get("developer_manager", {}).get("max_developers", 1000),
+        developer_age_days=cfg.get("developer_manager", {}).get("max_age_days", 1),
+        sniped_devs_file=cfg.get("developer_manager", {}).get("sniped_devs_file", "data/sniped_developers.json"),
+        
+        # Discord notification settings
+        discord_webhook_url=cfg.get("discord", {}).get("webhook_url"),
+        discord_queue_size=cfg.get("discord", {}).get("queue_size", 1000),
+        discord_worker_count=cfg.get("discord", {}).get("worker_count", 2),
+        discord_retry_limit=cfg.get("discord", {}).get("retry_limit", 3),
     )
     
     await trader.start()
