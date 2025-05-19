@@ -6,8 +6,6 @@ through webhooks while ensuring the main application flow isn't interrupted.
 """
 
 import asyncio
-import json
-import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,6 +21,7 @@ logger = get_logger(__name__)
 
 class NotificationType(Enum):
     """Types of notifications that can be sent."""
+    BULK_SNIPE_ADD = auto()
     SNIPE_ADD = auto()
     SNIPE_EXPIRE = auto()
     SNIPE_DELETE = auto()
@@ -79,6 +78,7 @@ class DiscordMessage:
             else:
                 # Default colors based on notification type
                 colors = {
+                    NotificationType.BULK_SNIPE_ADD: 0x0000FF, # Blue
                     NotificationType.SNIPE_ADD: 0x00FF00,      # Green
                     NotificationType.SNIPE_EXPIRE: 0xFFA500,   # Orange
                     NotificationType.SNIPE_DELETE: 0xFF0000,   # Red
@@ -272,6 +272,31 @@ class DiscordNotifier:
 
 
 # Helper functions for common notification types
+
+async def notify_bulk_snipe_add(
+    notifier: DiscordNotifier,
+    developer_addresses: List[str],
+    extra_info: Optional[Dict[str, Any]] = None
+) -> bool:
+    """Send a notification when multiple developers are added to the whitelist with all the addresses."""
+    message = f"Added {len(developer_addresses)} snipes: {', '.join(developer_addresses)}"
+
+    fields: List[EmbedField] = [
+        {"name": "Total Snipes", "value": f"{len(developer_addresses)}", "inline": True}
+    ]
+
+    if extra_info:
+        for key, value in extra_info.items():
+            fields.append({"name": key, "value": str(value), "inline": True})
+
+    message = DiscordMessage(
+        notification_type=NotificationType.SNIPE_ADD,
+        embed_title="🎯 Bulk Snipe Added",
+        embed_description=message,
+        embed_fields=fields
+    )
+
+    return await notifier.send(message)
 
 async def notify_snipe_add(
     notifier: DiscordNotifier, 

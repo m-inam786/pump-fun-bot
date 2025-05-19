@@ -16,7 +16,7 @@ from solders.pubkey import Pubkey
 from utils.logger import get_logger
 from utils.discord_notifications import (
     DiscordNotifier,
-    notify_snipe_add,
+    notify_bulk_snipe_add,
     notify_snipe_expire
 )
 
@@ -255,13 +255,9 @@ class DeveloperManager:
                 if new_developers and len(new_developers) > 0:
                     logger.info(f"Added {len(new_developers)} new developers to whitelist")
                     if self.discord_notifier:
-                        for dev in new_developers:
-                            asyncio.create_task(
-                                notify_snipe_add(
-                                    self.discord_notifier,
-                                    dev
-                                )
-                            )
+                        asyncio.create_task(
+                            notify_bulk_snipe_add(self.discord_notifier, new_developers, extra_info={"Total Snipes": len(self.developer_whitelist)})
+                        )
                 
         except Exception as e:
             logger.error(f"Error fetching/refreshing developers from database: {e}")
