@@ -141,8 +141,7 @@ dev_classifications AS (
     2 AS priority
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
-  WHERE rad.final_cumulative_volume >= 100000
-    AND dtt.total_tokens > 1  -- Ensure developer has token history
+  WHERE rad.final_cumulative_volume >= 100000 and rad.final_market_cap >= 55000
   
   UNION ALL
   
