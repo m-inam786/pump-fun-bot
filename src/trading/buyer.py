@@ -115,9 +115,44 @@ class TokenBuyer(Trader):
 
             logger.info(f"Buy transaction sent: {tx_signature}")
 
-            tx_details = await self.client.confirm_transaction(tx_signature)
+            logger.info(f"Confirming buy transaction {tx_signature}")
+            if await self.client.confirm_transaction(tx_signature):
+                logger.info(f"Transaction confirmed, getting details for {tx_signature}")
+                tx_details = await self.client.get_transaction_details(tx_signature)
+                logger.info(f"Transaction details received for {tx_signature}")
+            else:
+                return TradeResult(
+                    success=False,
+                    error_message=f"Transaction failed to confirm: {tx_signature}",
+                )
 
-            if tx_details:
+            if tx_details and tx_details.transaction.meta:
+                # Double check that the transaction was successful
+                if tx_details.transaction.meta.err:
+                    error_info = tx_details.transaction.meta.err
+                    
+                    # Log the raw error information
+                    logger.error(f"Buy operation failed: Transaction {tx_signature} failed with error: {error_info}")
+                    
+                    # For more detailed debugging, log the full transaction info
+                    try:
+                        # Extract more error details from logs if available
+                        if hasattr(tx_details.transaction.meta, 'log_messages') and tx_details.transaction.meta.log_messages:
+                            logs = tx_details.transaction.meta.log_messages
+                            error_logs = [log for log in logs if "Error" in log or "error" in log or "failed" in log or "Failed" in log]
+                            if error_logs:
+                                logger.error(f"Error details from logs: {error_logs}")
+                            else:
+                                logger.error(f"All logs: {logs}")
+                    
+                    except Exception as log_error:
+                        logger.error(f"Error extracting detailed error information: {log_error}")
+                    
+                    return TradeResult(
+                        success=False,
+                        error_message=f"Transaction failed: {error_info}",
+                    )
+                
                 # parse tx_details to get the amount of tokens bought
                 for log_entry in tx_details.transaction.meta.log_messages:
                     if "Program data:" in log_entry:
@@ -153,7 +188,7 @@ class TokenBuyer(Trader):
                         except Exception as e:
                             logger.error(f"Error calculating price from parsed data for mint {self.mint}: {e}. Data: {parsed_data}")
                 
-                logger.info(f"Buy transaction confirmed: {tx_signature}")
+                logger.info(f"Buy transaction successful: {tx_signature}")
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,
@@ -161,6 +196,7 @@ class TokenBuyer(Trader):
                     price=token_price_sol,
                 )
             else:
+                logger.error(f"Buy operation failed: Transaction details not received for {tx_signature}")
                 return TradeResult(
                     success=False,
                     error_message=f"Transaction failed to confirm: {tx_signature}",
