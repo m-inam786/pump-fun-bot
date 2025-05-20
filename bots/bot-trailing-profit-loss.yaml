@@ -34,15 +34,15 @@ trade:
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
   # 10M tokens
-  extreme_fast_token_amount: 15000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 18000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 1000_0000 # Base fee in microlamports
+  fixed_amount: 5000_0000 # Base fee in microlamports
   extra_percentage: 0.0
-  hard_cap: 1000_0000
+  hard_cap: 5000_0000
 
 # Developer manager configuration
 developer_manager:
