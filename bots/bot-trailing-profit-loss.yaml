@@ -70,7 +70,7 @@ zeroslot_tips:
   enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
   rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  tip_lamports: 1000000 # Amount of SOL to tip for faster transactions (1000000 = 0.001 SOL)
+  tip_lamports: 5000000 # Amount of SOL to tip for faster transactions (5000000 = 0.005 SOL)
 
 # Filters for token selection
 filters:
