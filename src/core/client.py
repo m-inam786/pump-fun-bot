@@ -184,8 +184,8 @@ class SolanaClient:
                 tx_opts = TxOpts(
                     skip_preflight=skip_preflight, preflight_commitment=Processed
                 )
-                # use zeroslot rpc client if tip provided
-                if self.zeroslot_tip_manager:
+                # use zeroslot rpc client if tip provided essentially only for buy transactions
+                if self.zeroslot_tip_manager and tip_amount_lamports:
                     response = await self.zeroslot_tip_manager.send_transaction(transaction, tx_opts)
                 else:
                     response = await client.send_transaction(transaction, tx_opts)
