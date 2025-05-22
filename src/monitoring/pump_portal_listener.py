@@ -229,15 +229,14 @@ class PumpPortalListener(BaseTokenListener):
                 mint=Pubkey.from_string(mint_address),
                 name=name,
                 symbol=symbol,
-                user=Pubkey.from_string(creator),
-                signature=token_info.get("signature", ""),
+                creator=Pubkey.from_string(creator),
                 # Optional fields if available
                 uri=token_info.get("uri", ""),
                 # Convert to program-specific format if needed
                 bonding_curve=token_info.get("bondingCurveKey", ""),
-                init_price=float(token_info.get("initialBuy", 0.0)),
-                init_supply=int(token_info.get("vTokensInBondingCurve", 0)),
-                v_sol=float(token_info.get("vSolInBondingCurve", 0.0))
+                # init_price=float(token_info.get("initialBuy", 0.0)),
+                # init_supply=int(token_info.get("vTokensInBondingCurve", 0)),
+                # v_sol=float(token_info.get("vSolInBondingCurve", 0.0))
             )
 
             return token
