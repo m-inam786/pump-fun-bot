@@ -406,13 +406,13 @@ class PumpTrader:
         if self.zeroslot_tip_manager:
             await self.zeroslot_tip_manager.start()
 
-        # Start the developer manager if enabled
-        if self.developer_manager:
-            await self.developer_manager.start()
-            
         # Start the Discord notifier if enabled
         if self.discord_notifier:
             await self.discord_notifier.start()
+
+        # Start the developer manager if enabled
+        if self.developer_manager:
+            await self.developer_manager.start()
 
         # Warm up the RPC
         try:
