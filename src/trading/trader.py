@@ -950,8 +950,8 @@ class PumpTrader:
                 "action": action,
                 "token_address": str(token_info.mint),
                 "symbol": token_info.symbol,
-                "price": price,
-                "amount": amount,
+                "price": float(price),
+                "amount": float(amount),
                 "tx_hash": str(tx_hash) if tx_hash else None,
             }
 
