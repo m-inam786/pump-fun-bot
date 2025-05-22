@@ -24,6 +24,13 @@ class TokenInfo:
     user: Pubkey
     creator: Pubkey
     creator_vault: Pubkey
+    # Trading parameters attached directly to avoid lookup in critical path
+    trading_params: dict[str, Any] = None
+
+    def __post_init__(self):
+        """Initialize default values."""
+        if self.trading_params is None:
+            self.trading_params = {}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TokenInfo":
@@ -35,6 +42,9 @@ class TokenInfo:
         Returns:
             TokenInfo instance
         """
+        # Extract trading params if included
+        trading_params = data.get("trading_params", {})
+        
         return cls(
             name=data["name"],
             symbol=data["symbol"],
@@ -45,15 +55,16 @@ class TokenInfo:
             user=Pubkey.from_string(data["user"]),
             creator=Pubkey.from_string(data["creator"]),
             creator_vault=Pubkey.from_string(data["creator_vault"]),
+            trading_params=trading_params
         )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary.
 
         Returns:
             Dictionary representation
         """
-        return {
+        result = {
             "name": self.name,
             "symbol": self.symbol,
             "uri": self.uri,
@@ -64,6 +75,12 @@ class TokenInfo:
             "creator": str(self.creator),
             "creatorVault": str(self.creator_vault),
         }
+        
+        # Include trading params if present
+        if self.trading_params:
+            result["trading_params"] = self.trading_params
+            
+        return result
 
 
 @dataclass

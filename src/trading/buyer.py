@@ -38,11 +38,7 @@ class TokenBuyer(Trader):
         client: SolanaClient,
         wallet: Wallet,
         curve_manager: BondingCurveManager,
-        priority_fee_manager: PriorityFeeManager,
-        amount: float,
-        slippage: float = 0.01,
         max_retries: int = 5,
-        extreme_fast_token_amount: int = 0,
         extreme_fast_mode: bool = False,
     ):
         """Initialize token buyer.
@@ -51,49 +47,73 @@ class TokenBuyer(Trader):
             client: Solana client for RPC calls
             wallet: Wallet for signing transactions
             curve_manager: Bonding curve manager
-            amount: Amount of SOL to spend
-            slippage: Slippage tolerance (0.01 = 1%)
             max_retries: Maximum number of retry attempts
-            extreme_fast_token_amount: Amount of token to buy if extreme fast mode is enabled
             extreme_fast_mode: If enabled, avoid fetching associated bonding curve state
         """
         self.client = client
         self.wallet = wallet
         self.curve_manager = curve_manager
-        self.priority_fee_manager = priority_fee_manager
-        self.amount = amount
-        self.slippage = slippage
         self.max_retries = max_retries
         self.extreme_fast_mode = extreme_fast_mode
-        self.extreme_fast_token_amount = extreme_fast_token_amount
         self.serializer = PumpFunSerializer()
 
-    async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
-        """Execute buy operation.
+    async def execute(
+        self, 
+        token_info: TokenInfo, 
+        token_amount: int | None = None, 
+        base_sol_amount: float | None = None, 
+        slippage_perc: float | None = None, 
+        priority_fee_microlamports: int | None = None, 
+        tip_amount_lamports: int | None = None, 
+        *args, 
+        **kwargs
+    ) -> TradeResult:
+        """Execute buy operation with configurable parameters.
 
         Args:
             token_info: Token information
+            token_amount: Amount of tokens to buy (for extreme fast mode)
+            base_sol_amount: Amount of SOL to spend on the buy
+            slippage_perc: Slippage tolerance percentage (0.1 = 10%)
+            priority_fee_microlamports: Priority fee in microlamports
+            tip_amount_lamports: Zero slot tip amount in lamports
 
         Returns:
             TradeResult with buy outcome
         """
         try:
+            # If parameters are not provided, log an error and return failure
+            if base_sol_amount is None:
+                logger.error("Buy operation failed: No SOL amount specified")
+                return TradeResult(success=False, error_message="No SOL amount specified for buy")
+
+            if slippage_perc is None:
+                logger.error("Buy operation failed: No slippage percentage specified")
+                return TradeResult(success=False, error_message="No slippage percentage specified for buy")
+                
+            if priority_fee_microlamports is None:
+                logger.error("Buy operation failed: No priority fee specified")
+                return TradeResult(success=False, error_message="No priority fee specified for buy")
+            
             # Convert amount to lamports
-            amount_lamports = int(self.amount * LAMPORTS_PER_SOL)
+            amount_lamports = int(base_sol_amount * LAMPORTS_PER_SOL)
 
             if self.extreme_fast_mode:
                 # Skip the wait and directly calculate the amount
-                token_amount = self.extreme_fast_token_amount
-                token_price_sol = self.amount / token_amount
+                if token_amount is None:
+                    logger.error("Buy operation failed: No token amount specified for extreme fast mode")
+                    return TradeResult(success=False, error_message="No token amount specified for extreme fast mode")
+                    
+                token_price_sol = base_sol_amount / token_amount
                 logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
             else:
                 # Regular behavior with RPC call
                 curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
                 token_price_sol = curve_state.calculate_price()
-                token_amount = self.amount / token_price_sol
+                token_amount = int(base_sol_amount / token_price_sol)
 
             # Calculate maximum SOL to spend with slippage
-            max_amount_lamports = int(amount_lamports * (1 + self.slippage))
+            max_amount_lamports = int(amount_lamports * (1 + slippage_perc))
 
             associated_token_account = self.wallet.get_associated_token_address(
                 token_info.mint
@@ -103,14 +123,19 @@ class TokenBuyer(Trader):
                 f"Buying {token_amount} tokens at {token_price_sol} SOL per token"
             )
             logger.info(
-                f"Total cost: {self.amount} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL} SOL)"
+                f"Total cost: {base_sol_amount} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL} SOL)"
             )
+            logger.info(f"Slippage: {slippage_perc * 100}%, Priority fee: {priority_fee_microlamports} microlamports ({priority_fee_microlamports / LAMPORTS_PER_SOL} SOL)")
+            if tip_amount_lamports:
+                logger.info(f"Zero slot tip: {tip_amount_lamports} lamports ({tip_amount_lamports / LAMPORTS_PER_SOL} SOL)")
 
             tx_signature = await self._send_buy_transaction(
                 token_info,
                 associated_token_account,
                 token_amount,
                 max_amount_lamports,
+                priority_fee_microlamports,
+                tip_amount_lamports=tip_amount_lamports
             )
 
             logger.info(f"Buy transaction sent: {tx_signature}")
@@ -212,6 +237,8 @@ class TokenBuyer(Trader):
         associated_token_account: Pubkey,
         token_amount: float,
         max_amount_lamports: int,
+        priority_fee_microlamports: int,
+        tip_amount_lamports: int | None = None
     ) -> str:
         """Send buy transaction.
 
@@ -295,9 +322,8 @@ class TokenBuyer(Trader):
                 self.wallet.keypair,
                 skip_preflight=True,
                 max_retries=self.max_retries,
-                priority_fee=await self.priority_fee_manager.calculate_priority_fee(
-                    self._get_relevant_accounts(token_info)
-                ),
+                priority_fee=priority_fee_microlamports,
+                tip_amount_lamports=tip_amount_lamports
             )
         except Exception as e:
             logger.error(f"Buy transaction failed: {e!s}")

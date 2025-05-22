@@ -75,8 +75,15 @@ class LogsListener(BaseTokenListener):
                                 continue
 
                             # Use the base class method to check if we should process this token
-                            if not await self.should_process_token(str(token_info.user)):
+                            # and get trading parameters in one step
+                            trading_params = await self.should_process_token(str(token_info.user))
+                            if trading_params is None:
                                 continue
+                            
+                            # Attach parameters directly to token_info - no additional lookup needed
+                            token_info.trading_params = trading_params
+                            if trading_params:
+                                logger.info(f"Attached trading parameters to token {token_info.symbol}: {trading_params}")
 
                             # If using developer manager and no specific creator_address was provided,
                             # mark this developer as sniped to prevent duplicate processing

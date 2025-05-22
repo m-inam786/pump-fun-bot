@@ -34,6 +34,7 @@ from trading.seller import TokenSeller
 from trading.trailing_seller import TrailingTokenSeller
 from utils.logger import get_logger
 from core.pubkeys import TOKEN_DECIMALS
+from core.zeroslot_tips import ZeroSlotTradeTipManager
 from utils.discord_notifications import (
     DiscordNotifier,
     notify_token_buy,
@@ -124,6 +125,12 @@ class PumpTrader:
         
         # SOL/USD converter settings
         sol_price_update_interval: int = 480,  # 8 minutes
+
+        # Zero slot tip stream settings
+        enable_zeroslot_tips: bool = False,
+        zeroslot_rpc_endpoint: str | None = None,
+        zeroslot_tip_account: str | None = None,
+        zeroslot_tip_lamports: int = 10000,
     ):
         """Initialize the pump trader.
         Args:
@@ -184,8 +191,29 @@ class PumpTrader:
             discord_retry_limit: Maximum retry attempts for Discord notifications
             
             sol_price_update_interval: Time between SOL price updates in seconds
+
+            enable_zeroslot_tips: Whether to enable Zero slot tips
+            zeroslot_rpc_endpoint: Zero slot RPC URL
+            zeroslot_tip_account: Zero slot tip account public key
         """
-        self.solana_client = SolanaClient(rpc_endpoint)
+
+        self.zeroslot_tip_manager = None
+        self.zeroslot_tip_lamports = zeroslot_tip_lamports
+        if enable_zeroslot_tips:
+            if zeroslot_tip_account and zeroslot_rpc_endpoint:
+                self.zeroslot_tip_manager = ZeroSlotTradeTipManager(
+                    rpc_endpoint=zeroslot_rpc_endpoint,
+                    tip_account_str=zeroslot_tip_account,
+                )
+                logger.info("Zero slot Tip Stream Manager enabled. Using solana client with zeroslot tip manager.")
+                self.solana_client = SolanaClient(rpc_endpoint, self.zeroslot_tip_manager)
+            else:
+                logger.warning("Zero slot tips enabled but WebSocket URL or tip account is missing. Manager not started. Using regular Solana client.")
+                self.solana_client = SolanaClient(rpc_endpoint)
+        else:
+            logger.info("Zero slot tips disabled. Using regular Solana client.")
+            self.solana_client = SolanaClient(rpc_endpoint)
+
         self.wallet = Wallet(private_key)
         self.curve_manager = BondingCurveManager(self.solana_client)
         self.shared_websocket_listener = SharedWebsocketListener(wss_endpoint)
@@ -201,15 +229,12 @@ class PumpTrader:
             extra_fee=extra_priority_fee,
             hard_cap=hard_cap_prior_fee,
         )
+
         self.buyer = TokenBuyer(
             self.solana_client,
             self.wallet,
             self.curve_manager,
-            self.priority_fee_manager,
-            buy_amount,
-            buy_slippage,
             max_retries,
-            extreme_fast_token_amount,
             extreme_fast_mode
         )
         # Initialize seller based on configuration
@@ -367,6 +392,10 @@ class PumpTrader:
         # Start the SOL to USD converter
         await self.sol_to_usd_converter.start()
         
+        # Start Zero slot Tip Manager if enabled
+        if self.zeroslot_tip_manager:
+            await self.zeroslot_tip_manager.start()
+
         # Start the developer manager if enabled
         if self.developer_manager:
             await self.developer_manager.start()
@@ -472,6 +501,13 @@ class PumpTrader:
             await self.sol_to_usd_converter.stop()
         except Exception as e:
             logger.error(f"Error stopping SOL/USD converter: {e!s}")
+
+        # Stop Zero slot Tip Manager if enabled
+        if self.zeroslot_tip_manager:
+            try:
+                await self.zeroslot_tip_manager.stop()
+            except Exception as e:
+                logger.error(f"Error stopping Zero slot Tip Manager: {e!s}")
 
         # Stop the shared WebSocket listener
         try:
@@ -642,18 +678,44 @@ class PumpTrader:
         try:
             # Wait for bonding curve to stabilize (unless in extreme fast mode)
             if not self.extreme_fast_mode:
-                # Save token info to file
-                # await self._save_token_info(token_info)
                 logger.info(
                     f"Waiting for {self.wait_time_after_creation} seconds for the bonding curve to stabilize..."
                 )
                 await asyncio.sleep(self.wait_time_after_creation)
 
-            # Buy token
+            # Set trading parameters based on source
+            if self.developer_manager is not None and token_info.trading_params:
+                # Use the parameters attached to the token (set by the listener)
+                dev_params = token_info.trading_params
+                logger.info(f"Using developer-specific parameters for {token_info.symbol}: {dev_params}")
+                
+                # Use developer-specific parameters with defaults from bot config
+                buy_amount = dev_params.get("buy_amount", self.buy_amount)
+                buy_slippage = dev_params.get("buy_slippage", self.buy_slippage)
+                priority_fee = dev_params.get("priority_fee", 
+                    self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0)
+                tip_amount = dev_params.get("tip_amount", self.zeroslot_tip_lamports)
+                token_amount = dev_params.get("token_amount", self.extreme_fast_token_amount) if self.extreme_fast_mode else None
+            else:
+                # Use bot's default configuration
+                buy_amount = self.buy_amount
+                buy_slippage = self.buy_slippage
+                priority_fee = self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0
+                tip_amount = self.zeroslot_tip_lamports
+                token_amount = self.extreme_fast_token_amount if self.extreme_fast_mode else None
+
+            # Buy token with appropriate parameters
             logger.info(
-                f"Buying {self.buy_amount:.6f} SOL worth of {token_info.symbol}..."
+                f"Buying {buy_amount:.6f} SOL worth of {token_info.symbol}..."
             )
-            buy_result: TradeResult = await self.buyer.execute(token_info)
+            buy_result: TradeResult = await self.buyer.execute(
+                token_info,
+                token_amount=token_amount,
+                base_sol_amount=buy_amount,
+                slippage_perc=buy_slippage,
+                priority_fee_microlamports=priority_fee,
+                tip_amount_lamports=tip_amount
+            )
 
             if buy_result.success:
                 await self._handle_successful_buy(token_info, buy_result)

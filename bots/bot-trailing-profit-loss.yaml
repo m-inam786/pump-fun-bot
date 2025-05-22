@@ -19,13 +19,13 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.8 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.01 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
   # Trailing profit/loss settings
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.99 # Trailing stop percentage (0.15 = 15%)
+  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.15 = 15%)
   take_profit_percentage: 0.30 # Take profit percentage (0.30 = 30%)
   percent_sell_amount: 0.80 # Percentage of tokens to sell at take profit (0.80 = 80%). Only applies at take profit; trailing stop sells 100% of tokens.
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
@@ -34,19 +34,19 @@ trade:
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
   # 10M tokens
-  extreme_fast_token_amount: 18000000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 5000_0000 # Base fee in microlamports
+  fixed_amount: 1000_0000 # Base fee in microlamports (approx 0.001 SOL)
   extra_percentage: 0.0
-  hard_cap: 5000_0000
+  hard_cap: 1000_0000
 
 # Developer manager configuration
 developer_manager:
-  enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
+  enabled: false # Set to true to enable multi-developer tracking via PostgreSQL
   db_host: "${PG_HOST}" # PostgreSQL host
   db_port: "${PG_PORT}" # PostgreSQL port
   db_name: "${PG_DATABASE}" # PostgreSQL database name
@@ -55,7 +55,7 @@ developer_manager:
   db_query_file: "data/developer_query/query.sql"
   refresh_interval: 1800 # Refresh interval in seconds (30 minutes)
   max_developers: 1000 # Maximum number of developers to track
-  max_age_days: 1 # Maximum age of developers in days
+  max_age_days: 3 # Maximum age of developers in days
   sniped_devs_file: "data/developer_list/sniped_developers.json" # File to store sniped developers
 
 # Discord notification settings
@@ -64,6 +64,13 @@ discord:
   queue_size: 1000
   worker_count: 1
   retry_limit: 3 
+
+# Zero slot tip manager configuration
+zeroslot_tips:
+  enabled: true # Set to true to enable Nozomi tips for faster transactions
+  tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
+  rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
+  tip_lamports: 10000 # Amount of SOL to tip for faster transactions (10000 = 0.001 SOL)
 
 # Filters for token selection
 filters:
@@ -79,7 +86,7 @@ retries:
   max_attempts: 3
   wait_after_creation: 5 # Reduced waiting time after token creation
   wait_after_buy: 15 # Only applicable if trailing stop is not used
-  wait_before_new_token: 2
+  wait_before_new_token: 15
 
 # Timing settings
 timing:
