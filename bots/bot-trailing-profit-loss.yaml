@@ -19,7 +19,7 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.03 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.04 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
@@ -70,7 +70,7 @@ zeroslot_tips:
   enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
   rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  tip_lamports: 10000000 # Amount of SOL to tip for faster transactions (10000000 = 0.01 SOL)
+  tip_lamports: 20000000 # Amount of SOL to tip for faster transactions (20000000 = 0.02 SOL)
 
 # Filters for token selection
 filters:
