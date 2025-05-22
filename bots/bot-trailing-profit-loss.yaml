@@ -19,24 +19,24 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.003 # Amount of SOL to spend when buying (in SOL)
-  buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
+  buy_amount: 0.003 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
+  buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%) (only valid if developer manager is false)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
-  # Trailing profit/loss settings
+  # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%)
-  take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%)
-  percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens.
+  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
+  take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
+  percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
   stagnation_timeout: 60 # Seconds of no price change before selling
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
   # 10M tokens
-  extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false) (only valid if developer manager is false)
 
-# Priority fee configuration
+# Priority fee configuration (only valid if developer manager is false)
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
@@ -65,7 +65,7 @@ discord:
   worker_count: 1
   retry_limit: 3 
 
-# Zero slot tip manager configuration
+# Zero slot tip manager configuration (only valid if developer manager is false)
 zeroslot_tips:
   enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
