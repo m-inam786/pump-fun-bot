@@ -8,7 +8,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any, Tuple
 
 import asyncpg
 from solders.pubkey import Pubkey
@@ -76,7 +76,8 @@ class DeveloperManager:
         self.discord_notifier = discord_notifier
 
         # Data structures for O(1) lookup
-        self.developer_whitelist: Dict[str, float] = {}  # address -> timestamp
+        # New structure: address -> {timestamp: float, params: {buy_amount, slippage, etc}}
+        self.developer_whitelist: Dict[str, Dict[str, Any]] = {}
         
         # Ensure persisted whitelist directory exists
         os.makedirs(os.path.dirname(self.persisted_whitelist_filepath), exist_ok=True)
@@ -191,7 +192,17 @@ class DeveloperManager:
             raise
 
     async def refresh_developers(self) -> None:
-        """Fetch developers from the database and update the whitelist."""
+        """Fetch developers from the database and update the whitelist.
+        
+        The query is expected to return at least one column (developer address),
+        but can also return additional columns for trading parameters in this order:
+        - developer_address (required) - developer public key
+        - buy_amount (optional, float) - amount of SOL to spend
+        - buy_slippage (optional, float) - slippage tolerance
+        - priority_fee (optional, int) - priority fee in microlamports
+        - tip_amount (optional, int) - zero slot tip amount in lamports
+        - token_amount (optional, int) - token amount for extreme fast mode
+        """
         if not self.db_pool:
             logger.error("Database pool not initialized")
             return
@@ -199,27 +210,47 @@ class DeveloperManager:
         try:
             now = time.time()
             
-            # 1. Fetch new developers from DB
-            db_developers: Dict[str, float] = {}
+            # 1. Fetch developers and their parameters from DB
+            db_developers: Dict[str, Dict[str, Any]] = {}
             async with self.db_pool.acquire() as conn:
                 rows = await conn.fetch(self.db_query)
                 for row in rows:
-                    developer = str(row[0]) 
-                    db_developers[developer] = now # Timestamp them as current
+                    # First column is always the developer address
+                    developer = str(row[0])
+                    
+                    # Initialize with timestamp and empty params dict
+                    dev_data = {"timestamp": now, "params": {}}
+                    
+                    # Extract additional parameters if available in the query results
+                    param_names = ["buy_amount", "buy_slippage", "priority_fee", "tip_amount", "token_amount"]
+                    
+                    # Check row length to determine available parameters
+                    for i, param_name in enumerate(param_names, start=1):
+                        if len(row) > i and row[i] is not None:
+                            # Store parameter in the params dictionary
+                            dev_data["params"][param_name] = row[i]
+                    
+                    # Store developer with parameters
+                    db_developers[developer] = dev_data
+                    
+                    # Log if we found parameters
+                    if dev_data["params"]:
+                        logger.info(f"Found parameters for developer {developer}: {dev_data['params']}")
 
             async with self.whitelist_lock:
                 current_whitelist = self.developer_whitelist.copy()
                 
                 # 2. Clean stale developers from the current whitelist
-                cleaned_whitelist: Dict[str, float] = {}
-                for dev, ts in current_whitelist.items():
-                    if (now - ts) <= self.max_age_seconds:
-                        cleaned_whitelist[dev] = ts
+                cleaned_whitelist: Dict[str, Dict[str, Any]] = {}
+                for dev, dev_data in current_whitelist.items():
+                    timestamp = dev_data.get("timestamp", 0)
+                    if (now - timestamp) <= self.max_age_seconds:
+                        cleaned_whitelist[dev] = dev_data
                     else:
-                        logger.debug(f"Removing stale developer {dev} from whitelist (age: {now-ts}s)")
+                        logger.debug(f"Removing stale developer {dev} from whitelist (age: {now-timestamp}s)")
                         # Send notification for expired developer
                         if self.discord_notifier:
-                            age_days = (now - ts) / 86400  # Convert seconds to days
+                            age_days = (now - timestamp) / 86400  # Convert seconds to days
                             asyncio.create_task(
                                 notify_snipe_expire(
                                     self.discord_notifier,
@@ -232,17 +263,22 @@ class DeveloperManager:
                 # 3. Add/Update new developers from DB
                 # Keep track of newly added developers
                 new_developers = []
-                for dev, ts in db_developers.items():
+                for dev, dev_data in db_developers.items():
                     if dev not in cleaned_whitelist:
                         new_developers.append(dev)
-                    cleaned_whitelist[dev] = ts 
+                    else:
+                        # For existing developers, update timestamp but preserve params if none in DB
+                        if not dev_data["params"] and "params" in cleaned_whitelist[dev]:
+                            dev_data["params"] = cleaned_whitelist[dev]["params"]
+                            
+                    cleaned_whitelist[dev] = dev_data
 
                 # 4. Enforce max_developers limit, prioritizing newest
                 if len(cleaned_whitelist) > self.max_developers:
                     # Sort by timestamp (descending for newest) then address for tie-breaking
                     sorted_devs = sorted(
                         cleaned_whitelist.items(), 
-                        key=lambda x: (x[1], x[0]), 
+                        key=lambda x: (x[1].get("timestamp", 0), x[0]), 
                         reverse=True
                     )
                     self.developer_whitelist = dict(sorted_devs[:self.max_developers])
@@ -261,21 +297,9 @@ class DeveloperManager:
                 
         except Exception as e:
             logger.error(f"Error fetching/refreshing developers from database: {e}")
-
-    async def is_whitelisted(self, developer_address: str | Pubkey) -> bool:
-        """Check if a developer is in the whitelist.
-
-        Args:
-            developer_address: Developer address to check
-
-        Returns:
-            True if the developer is in the whitelist, False otherwise
-        """
-        # Fast lookup with minimal locking - this is the critical path
-        logger.info(f"Checking if {developer_address} is whitelisted")
-        async with self.whitelist_lock:
-            return developer_address in self.developer_whitelist
-
+            if isinstance(e, asyncpg.exceptions.UndefinedColumnError):
+                logger.error("This error might indicate your SQL query doesn't return the expected columns. Check your query.")
+                
     async def mark_as_sniped(self, developer_address: str | Pubkey) -> None:
         """Mark a developer as sniped by removing them from the whitelist.
 
@@ -283,6 +307,7 @@ class DeveloperManager:
             developer_address: Developer address to mark
         """
         # Remove from whitelist
+        developer_address = str(developer_address)
         async with self.whitelist_lock:
             if developer_address in self.developer_whitelist:
                 del self.developer_whitelist[developer_address]
@@ -290,23 +315,72 @@ class DeveloperManager:
             else:
                 logger.info(f"Developer {developer_address} was not in whitelist to mark as sniped.")
 
+    async def set_developer_params(self, developer_address: str | Pubkey, params: Dict[str, Any]) -> bool:
+        """Set trading parameters for a specific developer.
+
+        Args:
+            developer_address: Developer address to set parameters for
+            params: Dictionary with trading parameters
+
+        Returns:
+            True if parameters were set, False if developer not found
+        """
+        developer_address = str(developer_address)
+        async with self.whitelist_lock:
+            if developer_address in self.developer_whitelist:
+                if "params" not in self.developer_whitelist[developer_address]:
+                    self.developer_whitelist[developer_address]["params"] = {}
+                self.developer_whitelist[developer_address]["params"].update(params)
+                logger.info(f"Updated trading parameters for developer {developer_address}: {params}")
+                return True
+            logger.warning(f"Attempted to set parameters for non-whitelisted developer {developer_address}")
+            return False
+
+    async def get_developer_params(self, developer_address: str | Pubkey) -> Dict[str, Any]:
+        """Get trading parameters for a specific developer.
+
+        Note: This method uses locks for safety but is slower than direct access.
+        For the critical path, the BaseTokenListener accesses the whitelist directly
+        without using this method to eliminate function call overhead.
+        
+        Args:
+            developer_address: Developer address to get parameters for
+
+        Returns:
+            Dictionary with trading parameters or empty dict if developer not found
+        """
+        developer_address = str(developer_address)
+        async with self.whitelist_lock:
+            if developer_address in self.developer_whitelist:
+                return self.developer_whitelist[developer_address].get("params", {})
+            return {}
+
     async def _load_persisted_whitelist(self) -> None:
         """Load the developer whitelist from file."""
         try:
             if os.path.exists(self.persisted_whitelist_filepath):
                 async with self.file_lock:
                     with open(self.persisted_whitelist_filepath, 'r') as f:
-                        # Ensure we load into the correct structure
+                        # Load the data and convert if needed
                         loaded_data = json.load(f)
-                        if not isinstance(loaded_data, dict):
+                        converted_data = {}
+                        
+                        # Handle legacy format (string -> timestamp) conversion
+                        if loaded_data and isinstance(loaded_data, dict):
+                            for dev, value in loaded_data.items():
+                                if isinstance(value, (int, float)):
+                                    # Legacy format - convert to new format
+                                    converted_data[dev] = {"timestamp": value, "params": {}}
+                                elif isinstance(value, dict) and "timestamp" in value:
+                                    # Already in new format
+                                    converted_data[dev] = value
+                                else:
+                                    logger.warning(f"Unrecognized format for developer {dev}: {value}. Skipping.")
+                        else:
                             logger.warning(f"Persisted whitelist file {self.persisted_whitelist_filepath} does not contain a valid dictionary. Initializing empty whitelist.")
-                            loaded_data = {}
                     
                 async with self.whitelist_lock:
-                    # We can choose to merge or replace. Replacing is simpler.
-                    # If merging, need to consider timestamps and max_developers.
-                    # For now, let's replace. The refresh will soon fetch live data.
-                    self.developer_whitelist = loaded_data 
+                    self.developer_whitelist = converted_data
                     
                 logger.info(f"Loaded {len(self.developer_whitelist)} developers into whitelist from {self.persisted_whitelist_filepath}")
             else:

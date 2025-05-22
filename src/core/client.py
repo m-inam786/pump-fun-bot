@@ -17,7 +17,7 @@ from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
-
+from core.zeroslot_tips import ZeroSlotTradeTipManager
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -26,19 +26,21 @@ logger = get_logger(__name__)
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str):
+    def __init__(self, rpc_endpoint: str, zeroslot_tip_manager: ZeroSlotTradeTipManager | None = None):
         """Initialize Solana client with RPC endpoint.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
+            zeroslot_tip_manager: ZeroSlotTradeTipManager instance (Optional)
         """
         self.rpc_endpoint = rpc_endpoint
         self._client = None
+        self.zeroslot_tip_manager = zeroslot_tip_manager
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
 
-    async def start_blockhash_updater(self, interval: float = 5.0):
+    async def start_blockhash_updater(self, interval: float = 0.5):
         """Start background task to update recent blockhash."""
         while True:
             try:
@@ -141,9 +143,10 @@ class SolanaClient:
         skip_preflight: bool = True,
         max_retries: int = 3,
         priority_fee: int | None = None,
+        tip_amount_lamports: int | None = None
     ) -> str:
         """
-        Send a transaction with optional priority fee.
+        Send a transaction with optional priority fee and tip.
 
         Args:
             instructions: List of instructions to include in the transaction.
@@ -155,7 +158,7 @@ class SolanaClient:
             Transaction signature.
         """
         client = await self.get_client()
-
+        
         logger.info(
             f"Priority fee in microlamports: {priority_fee if priority_fee else 0}"
         )
@@ -168,6 +171,10 @@ class SolanaClient:
             ]
             instructions = fee_instructions + instructions
 
+        # If zeroslot tip manager is provided, add tip instruction at the end
+        if self.zeroslot_tip_manager and tip_amount_lamports:
+            instructions.append(await self.zeroslot_tip_manager.get_tip_instruction(signer_keypair.pubkey(), tip_amount_lamports))
+
         recent_blockhash = await self.get_cached_blockhash()
         message = Message(instructions, signer_keypair.pubkey())
         transaction = Transaction([signer_keypair], message, recent_blockhash)
@@ -177,7 +184,11 @@ class SolanaClient:
                 tx_opts = TxOpts(
                     skip_preflight=skip_preflight, preflight_commitment=Processed
                 )
-                response = await client.send_transaction(transaction, tx_opts)
+                # use zeroslot rpc client if tip provided
+                if self.zeroslot_tip_manager:
+                    response = await self.zeroslot_tip_manager.send_transaction(transaction, tx_opts)
+                else:
+                    response = await client.send_transaction(transaction, tx_opts)
                 return response.value
 
             except Exception as e:
@@ -189,7 +200,7 @@ class SolanaClient:
 
                 wait_time = 2**attempt
                 logger.warning(
-                    f"Transaction attempt {attempt + 1} failed: {e!s}, retrying in {wait_time}s"
+                    f"Transaction attempt {attempt + 1} failed: {e!s}, retrying in {wait_time}s, error: {e!s}"
                 )
                 await asyncio.sleep(wait_time)
 
@@ -224,7 +235,7 @@ class SolanaClient:
         except Exception as e:
             logger.error(f"Failed to get transaction details {signature}: {e!s}")
             return None
-    
+
     async def post_rpc(self, body: dict[str, Any]) -> dict[str, Any] | None:
         """
         Send a raw RPC request to the Solana node.

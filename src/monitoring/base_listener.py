@@ -41,16 +41,22 @@ class BaseTokenListener(ABC):
     async def should_process_token(
         self, 
         creator_address_to_check: str | None = None
-    ) -> bool:
+    ) -> dict | None:
         """Determine if a token should be processed based on creator address.
         
         Args:
             creator_address: Optional creator address to filter by
             
         Returns:
-            True if the token should be processed, False otherwise
+            Dictionary of trading parameters if the token should be processed, None otherwise
         """
         if self.developer_manager is not None and creator_address_to_check is not None:
-            return await self.developer_manager.is_whitelisted(creator_address_to_check)
+            # Return developer parameters directly instead of just a boolean
+            # This avoids an additional lookup in the critical path
+            if creator_address_to_check in self.developer_manager.developer_whitelist:
+                return self.developer_manager.developer_whitelist[creator_address_to_check].get("params", {})
+            return None
         else:
-            return True
+            # Return empty dict when no developer manager or creator is specified
+            # This indicates the token should be processed with default parameters
+            return {}

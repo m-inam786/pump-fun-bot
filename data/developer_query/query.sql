@@ -4,7 +4,7 @@ WITH all_tokens_for_rugger_check AS (
   UNION ALL
   SELECT owner, created FROM mints
 ),
-recent_twenty_coins AS (
+recent_five_coins AS (
   SELECT
     owner AS dev_address,
     created,
@@ -16,8 +16,8 @@ recent_twenty_coins AS (
 ),
 last_twenty AS (
   SELECT *
-  FROM recent_twenty_coins
-  WHERE rn <= 20
+  FROM recent_five_coins
+  WHERE rn <= 5
 ),
 coin_time_gaps AS (
   SELECT
@@ -74,7 +74,7 @@ latest_coins AS (
     ) AS rn
   FROM stagnant_mints
   WHERE owner NOT IN (SELECT dev_address FROM potential_ruggers)  -- Filter out ruggers
-    AND owner NOT IN (SELECT dev_address FROM developers_with_recent_active)  -- Filter out those whose LATEST mint is active
+  AND owner NOT IN (SELECT dev_address FROM developers_with_recent_active)  -- Filter out those whose LATEST mint is active
 ),
 -- Calculate total token count for each developer to ensure they have history
 dev_total_tokens AS (
@@ -114,15 +114,20 @@ dev_token_counts AS (
   GROUP BY dev_address
 ),
 dev_classifications AS (
-  -- Criterion 1: Latest coin migrated (final market cap >= 55k)
+--   Criterion 1: Latest coin migrated (final market cap >= 55k)
   SELECT 
     rad.dev_address,
     rad.most_recent_mint_id,
     rad.latest_created,
     rad.final_cumulative_volume,
     rad.final_market_cap,
-    'Latest coin migrated (mcap ≥ 55k)' AS qualification_type,
-    1 AS priority
+    'Latest coin migrated (final mcap ≥ 55k)' AS qualification_type,
+    1 AS priority,
+    0.8 AS buy_amount,                 -- 0.8 SOL buy amount
+    0.25 AS buy_slippage,              -- 25% slippage
+    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
+    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    15000000 AS token_amount            -- Token amount to buy 15M
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
   WHERE rad.final_market_cap >= 55000
@@ -130,22 +135,27 @@ dev_classifications AS (
   
   UNION ALL
   
-  -- Criterion 2: Latest coin volume above 100k
+--   Criterion 2: Latest coin volume above 100k
   SELECT 
     rad.dev_address,
     rad.most_recent_mint_id,
     rad.latest_created,
     rad.final_cumulative_volume,
     rad.final_market_cap,
-    'Latest coin volume ≥ 100k' AS qualification_type,
-    2 AS priority
+    'Latest coin volume ≥ 100k AND migrated (final mcap ≥ 55k)' AS qualification_type,
+    2 AS priority,
+    0.6 AS buy_amount,                 -- 0.6 SOL buy amount
+    0.25 AS buy_slippage,              -- 25% slippage
+    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
+    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    10000000 AS token_amount            -- Token amount to buy 10M
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
   WHERE rad.final_cumulative_volume >= 100000 and rad.final_market_cap >= 55000
   
   UNION ALL
   
-  -- Criterion 3: Latest 2 coins each with volume ≥ 40k
+--   Criterion 3: Latest 2 coins each with volume ≥ 40k
   SELECT 
     rad.dev_address,
     rad.most_recent_mint_id,
@@ -153,15 +163,20 @@ dev_classifications AS (
     rad.final_cumulative_volume,
     rad.final_market_cap,
     'Latest 2 coins volume ≥ 40k each' AS qualification_type,
-    3 AS priority
+    3 AS priority,
+    0.5 AS buy_amount,                 -- 0.5 SOL buy amount
+    0.25 AS buy_slippage,              -- 25% slippage
+    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
+    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    10000000 AS token_amount            -- Token amount to buy 10M
   FROM recent_active_devs rad
   JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
-  -- Check if developer has at least 2 tokens with volume ≥ 40k each
+--   Check if developer has at least 2 tokens with volume ≥ 40k each
   WHERE dtc.coins_above_40k >= 2
   
   UNION ALL
   
-  -- Criterion 4: Latest 3 coins each with volume ≥ 25k
+--   Criterion 4: Latest 3 coins each with volume ≥ 25k
   SELECT 
     rad.dev_address,
     rad.most_recent_mint_id,
@@ -169,10 +184,15 @@ dev_classifications AS (
     rad.final_cumulative_volume,
     rad.final_market_cap,
     'Latest 3 coins volume ≥ 25k each' AS qualification_type,
-    4 AS priority
+    4 AS priority,
+    0.4 AS buy_amount,                 -- 0.4 SOL buy amount
+    0.25 AS buy_slippage,              -- 25% slippage
+    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
+    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    7500000 AS token_amount            -- Token amount to buy 7.5M
   FROM recent_active_devs rad
   JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
-  -- Check if developer has at least 3 tokens with volume ≥ 25k each
+--   Check if developer has at least 3 tokens with volume ≥ 25k each
   WHERE dtc.coins_above_25k >= 3
 ),
 ranked_classifications AS (
@@ -183,11 +203,22 @@ ranked_classifications AS (
     final_cumulative_volume,
     final_market_cap,
     qualification_type,
+    buy_amount,
+    buy_slippage,
+    priority_fee,
+    tip_amount,
+    token_amount,
     ROW_NUMBER() OVER (PARTITION BY dev_address ORDER BY priority) AS priority_rank
   FROM dev_classifications
-) 
+)
+-- ***** DONT MODIFY THE ORDERING OF THE COLUMNS *****
 SELECT 
   dev_address,
+  buy_amount,             -- SOL to spend
+  buy_slippage,           -- Slippage tolerance (decimal percentage)
+  priority_fee,           -- Priority fee in microlamports
+  tip_amount,             -- Zero slot tip amount in lamports
+  token_amount,            -- Token amount for extreme fast mode
   most_recent_mint_id,
   qualification_type,
   ROUND(final_cumulative_volume) AS volume_usd,
