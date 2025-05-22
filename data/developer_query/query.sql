@@ -137,7 +137,7 @@ dev_classifications AS (
     0.7 AS buy_amount,                 -- 0.7 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
     30000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.003 SOL)
-    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
+    20000000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     15000000 AS token_amount,           -- Token amount to buy 15M
     0.7 AS percent_sell_amount,       -- Sell 70% at take profit
     0.55 AS take_profit_percentage      -- 55% take profit target
@@ -157,7 +157,7 @@ dev_classifications AS (
     0.45 AS buy_amount,                 -- 0.6 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
-    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
+    20000000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     10000000 AS token_amount,           -- Token amount to buy 10M
     0.80 AS percent_sell_amount,       -- Sell 80% at take profit
     0.3 AS take_profit_percentage      -- 30% take profit target
@@ -179,7 +179,7 @@ dev_classifications AS (
     0.6 AS buy_amount,                 -- 0.6 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
     30000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.003 SOL)
-    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
+    20000000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     10000000 AS token_amount,           -- Token amount to buy 10M
     0.9 AS percent_sell_amount,        -- Sell 90% at take profit
     0.4 AS take_profit_percentage      -- 40% take profit target
@@ -202,7 +202,7 @@ dev_classifications AS (
     0.4 AS buy_amount,                 -- 0.4 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
     20000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.002 SOL)
-    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
+    20000000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     7500000 AS token_amount,            -- Token amount to buy 7.5M
     1 AS percent_sell_amount,        -- Sell 100% at take profit
     0.35 AS take_profit_percentage      -- 35% take profit target
