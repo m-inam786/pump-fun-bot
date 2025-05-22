@@ -292,9 +292,49 @@ class DeveloperManager:
                 if new_developers and len(new_developers) > 0:
                     logger.info(f"Added {len(new_developers)} new developers to whitelist")
                     if self.discord_notifier:
-                        asyncio.create_task(
-                            notify_bulk_snipe_add(self.discord_notifier, new_developers, extra_info={"Total Snipes": len(self.developer_whitelist)})
-                        )
+                        # Prepare developer data with their configs
+                        dev_configs = []
+                        for dev in new_developers:
+                            config = db_developers.get(dev, {}).get("params", {})
+                            
+                            # Format values for readability
+                            formatted_config = {}
+                            for key, value in config.items():
+                                if key == "priority_fee" and value is not None:
+                                    # Convert microlamports to SOL
+                                    formatted_value = f"{value / 1_000_000_000_000:.12f} SOL" 
+                                elif key == "tip_amount" and value is not None:
+                                    # Convert lamports to SOL
+                                    formatted_value = f"{value / 1_000_000_000:.9f} SOL"
+                                elif key == "buy_amount" and value is not None:
+                                    # Format SOL amount with proper precision
+                                    formatted_value = f"{value:.3f} SOL"
+                                elif key == "buy_slippage" and value is not None:
+                                    # Format percentage
+                                    formatted_value = f"{value:.1f}%"
+                                elif key == "take_profit_percentage" and value is not None:
+                                    # Format percentage
+                                    formatted_value = f"{value:.1f}%"
+                                elif key == "percent_sell_amount" and value is not None:
+                                    # Format percentage
+                                    formatted_value = f"{value:.1f}%"
+                                else:
+                                    formatted_value = str(value)
+                                
+                                formatted_config[key] = formatted_value
+                            
+                            dev_configs.append({"address": dev, "config": formatted_config})
+                            
+                        # split list into chunks of 100
+                        for i in range(0, len(dev_configs), 100):
+                            chunk = dev_configs[i:i+100]
+                            asyncio.create_task(
+                                notify_bulk_snipe_add(
+                                    self.discord_notifier, 
+                                    chunk, 
+                                    extra_info={"Total Snipes": len(self.developer_whitelist)}
+                                )
+                            )
                 
         except Exception as e:
             logger.error(f"Error fetching/refreshing developers from database: {e}")

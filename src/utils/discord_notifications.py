@@ -18,6 +18,16 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Discord message size limits
+DISCORD_LIMITS = {
+    "content": 2000,
+    "embed_title": 256,
+    "embed_description": 4096,
+    "field_name": 256,
+    "field_value": 1024,
+    "total_embed_chars": 6000,
+    "max_fields": 25
+}
 
 class NotificationType(Enum):
     """Types of notifications that can be sent."""
@@ -54,24 +64,62 @@ class DiscordMessage:
         if not self.timestamp:
             self.timestamp = time.time()
     
+    def _truncate_str(self, text: str, limit: int) -> str:
+        """Truncate a string to the specified limit."""
+        if len(text) <= limit:
+            return text
+        return text[:limit-3] + "..."
+    
     def to_payload(self) -> Dict[str, Any]:
         """Convert the message to a Discord webhook payload."""
         payload = {}
         
         if self.content:
-            payload["content"] = self.content
+            payload["content"] = self._truncate_str(self.content, DISCORD_LIMITS["content"])
             
         if any([self.embed_title, self.embed_description, self.embed_fields]):
             embed = {}
+            total_chars = 0
             
             if self.embed_title:
-                embed["title"] = self.embed_title
+                truncated_title = self._truncate_str(self.embed_title, DISCORD_LIMITS["embed_title"])
+                embed["title"] = truncated_title
+                total_chars += len(truncated_title)
                 
             if self.embed_description:
-                embed["description"] = self.embed_description
+                truncated_desc = self._truncate_str(self.embed_description, DISCORD_LIMITS["embed_description"])
+                embed["description"] = truncated_desc
+                total_chars += len(truncated_desc)
                 
             if self.embed_fields:
-                embed["fields"] = self.embed_fields
+                # Limit number of fields to maximum allowed
+                fields = self.embed_fields[:DISCORD_LIMITS["max_fields"]]
+                
+                # Truncate field content to fit limits
+                processed_fields = []
+                for field in fields:
+                    # Stop adding fields if we're approaching total embed char limit
+                    if total_chars >= DISCORD_LIMITS["total_embed_chars"] - 100:
+                        break
+                        
+                    name = self._truncate_str(field["name"], DISCORD_LIMITS["field_name"])
+                    value = self._truncate_str(field["value"], DISCORD_LIMITS["field_value"])
+                    
+                    field_chars = len(name) + len(value)
+                    if total_chars + field_chars > DISCORD_LIMITS["total_embed_chars"]:
+                        # Skip this field if it would push us over the limit
+                        continue
+                        
+                    processed_fields.append({
+                        "name": name,
+                        "value": value,
+                        "inline": field.get("inline", False)
+                    })
+                    
+                    total_chars += field_chars
+                
+                if processed_fields:
+                    embed["fields"] = processed_fields
                 
             if self.embed_color:
                 embed["color"] = self.embed_color
@@ -275,22 +323,52 @@ class DiscordNotifier:
 
 async def notify_bulk_snipe_add(
     notifier: DiscordNotifier,
-    developer_addresses: List[str],
+    developer_data: List[Dict[str, Any]],
     extra_info: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """Send a notification when multiple developers are added to the whitelist with all the addresses."""
-    message = f"Added {len(developer_addresses)} snipes: {', '.join(developer_addresses)}"
+    """
+    Send a notification when multiple developers are added to the whitelist with their configs.
+    
+    Args:
+        notifier: Discord notifier instance
+        developer_data: List of dictionaries containing developer addresses and configs
+        extra_info: Additional information to include
+        
+    Returns:
+        True if notification was queued successfully
+    """
+    # Extract just the addresses for the message
+    addresses = [dev["address"] for dev in developer_data]
+    message = f"Added {len(addresses)} snipes"
 
-    fields: List[EmbedField] = [
-        {"name": "Total Snipes", "value": f"{len(developer_addresses)}", "inline": True}
-    ]
+    fields: List[EmbedField] = []
+    
+    # Add a field for each developer with their config
+    for i, dev_info in enumerate(developer_data, 1):
+        address = dev_info["address"]
+        config = dev_info.get("config", {})
+        
+        # Format the value with the config parameters
+        value = f"`{address}`\n"
+        
+        if config:
+            config_str = "\n".join([f"• {key}: {val}" for key, val in config.items()])
+            value += f"```{config_str}```"
+        
+        # Add field with the address and config
+        fields.append({
+            "name": f"Developer {i}",
+            "value": value,
+            "inline": True
+        })
 
+    # Add extra info fields
     if extra_info:
         for key, value in extra_info.items():
             fields.append({"name": key, "value": str(value), "inline": True})
 
     message = DiscordMessage(
-        notification_type=NotificationType.SNIPE_ADD,
+        notification_type=NotificationType.BULK_SNIPE_ADD,
         embed_title="🎯 Bulk Snipe Added",
         embed_description=message,
         embed_fields=fields
