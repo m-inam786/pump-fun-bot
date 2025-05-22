@@ -5,12 +5,13 @@ Listens for new Pump.fun token creations via PumpPortal WebSocket.
 import asyncio
 import json
 from datetime import datetime
+from solders.pubkey import Pubkey
 
 import websockets
 
 # PumpPortal WebSocket URL
 WS_URL = "wss://pumpportal.fun/api/data"
-
+PUMP_PROGRAM = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
 def format_sol(value):
     return f"{value:.6f} SOL"
@@ -40,26 +41,33 @@ async def listen_for_new_tokens():
                     continue
                 
                 print("\n" + "=" * 50)
-                print(token_info)
-                # print(
-                #     f"New token created: {token_info.get('name')} ({token_info.get('symbol')})"
-                # )
-                # print("=" * 50)
-                # print(f"Address:        {token_info.get('mint')}")
-                # print(f"Creator:        {token_info.get('traderPublicKey')}")
-                # print(f"Initial Buy:    {format_sol(token_info.get('initialBuy', 0))}")
-                # print(
-                #     f"Market Cap:     {format_sol(token_info.get('marketCapSol', 0))}"
-                # )
-                # print(f"Bonding Curve:  {token_info.get('bondingCurveKey')}")
-                # print(
-                #     f"Virtual SOL:    {format_sol(token_info.get('vSolInBondingCurve', 0))}"
-                # )
-                # print(
-                #     f"Virtual Tokens: {token_info.get('vTokensInBondingCurve', 0):,.0f}"
-                # )
-                # print(f"Metadata URI:   {token_info.get('uri')}")
-                # print(f"Signature:      {token_info.get('signature')}")
+                print(
+                    f"New token created: {token_info.get('name')} ({token_info.get('symbol')})"
+                )
+                print("=" * 50)
+                print(f"Address:        {token_info.get('mint')}")
+                print(f"Creator:        {token_info.get('traderPublicKey')}")
+                print(f"Initial Buy:    {format_sol(token_info.get('initialBuy', 0))}")
+                print(
+                    f"Market Cap:     {format_sol(token_info.get('marketCapSol', 0))}"
+                )
+                print(f"Bonding Curve:  {token_info.get('bondingCurveKey')}")
+                print(
+                    f"Virtual SOL:    {format_sol(token_info.get('vSolInBondingCurve', 0))}"
+                )
+                print(
+                    f"Virtual Tokens: {token_info.get('vTokensInBondingCurve', 0):,.0f}"
+                )
+                print(f"Metadata URI:   {token_info.get('uri')}")
+                print(f"Signature:      {token_info.get('signature')}")
+                derived_address, _ = Pubkey.find_program_address(
+                    [
+                        b"creator-vault",
+                        bytes(Pubkey.from_string(token_info.get('traderPublicKey')))
+                    ],
+                    PUMP_PROGRAM,  
+                )
+                print(f"Creator Vault:  {str(derived_address)}")
                 print("=" * 50)
             except websockets.exceptions.ConnectionClosed:
                 print("\nWebSocket connection closed. Reconnecting...")

@@ -12,8 +12,11 @@ from solders.pubkey import Pubkey
 
 from monitoring.base_listener import BaseTokenListener
 from monitoring.developer_manager import DeveloperManager
+from core.pubkeys import PumpAddresses, SystemAddresses
 from trading.base import TokenInfo
 from utils.logger import get_logger
+
+PUMP_PROGRAM = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
 
 logger = get_logger(__name__)
 
@@ -230,13 +233,14 @@ class PumpPortalListener(BaseTokenListener):
                 name=name,
                 symbol=symbol,
                 creator=Pubkey.from_string(creator),
-                # Optional fields if available
+                user=Pubkey.from_string(creator),
+                creator_vault=self._find_creator_vault(Pubkey.from_string(creator)),
                 uri=token_info.get("uri", ""),
-                # Convert to program-specific format if needed
                 bonding_curve=token_info.get("bondingCurveKey", ""),
-                # init_price=float(token_info.get("initialBuy", 0.0)),
-                # init_supply=int(token_info.get("vTokensInBondingCurve", 0)),
-                # v_sol=float(token_info.get("vSolInBondingCurve", 0.0))
+                associated_bonding_curve=self._find_associated_bonding_curve(
+                    Pubkey.from_string(mint_address),
+                    Pubkey.from_string(token_info.get("bondingCurveKey", "")),
+                ),
             )
 
             return token
@@ -250,3 +254,37 @@ class PumpPortalListener(BaseTokenListener):
             logger.error(f"Error processing WebSocket message: {str(e)}")
 
         return None 
+    
+    def _find_creator_vault(self, creator: Pubkey) -> Pubkey:
+        derived_address, _ = Pubkey.find_program_address(
+            [
+                b"creator-vault",
+                bytes(creator)
+            ],
+            PUMP_PROGRAM,  
+        )
+        return derived_address
+    
+    def _find_associated_bonding_curve(
+        self, mint: Pubkey, bonding_curve: Pubkey
+    ) -> Pubkey:
+        """
+        Find the associated bonding curve for a given mint and bonding curve.
+        This uses the standard ATA derivation.
+
+        Args:
+            mint: Token mint address
+            bonding_curve: Bonding curve address
+
+        Returns:
+            Associated bonding curve address
+        """
+        derived_address, _ = Pubkey.find_program_address(
+            [
+                bytes(bonding_curve),
+                bytes(SystemAddresses.TOKEN_PROGRAM),
+                bytes(mint),
+            ],
+            SystemAddresses.ASSOCIATED_TOKEN_PROGRAM,
+        )
+        return derived_address
