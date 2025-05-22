@@ -344,7 +344,7 @@ async def notify_bulk_snipe_add(
     fields: List[EmbedField] = []
     
     # Add a field for each developer with their config
-    for i, dev_info in enumerate(developer_data, 1):
+    for _, dev_info in enumerate(developer_data, 1):
         address = dev_info["address"]
         config = dev_info.get("config", {})
         
@@ -357,7 +357,7 @@ async def notify_bulk_snipe_add(
         
         # Add field with the address and config
         fields.append({
-            "name": f"Developer {i}",
+            "name": f"Developer Address:",
             "value": value,
             "inline": True
         })

@@ -302,22 +302,32 @@ class DeveloperManager:
                             for key, value in config.items():
                                 if key == "priority_fee" and value is not None:
                                     # Convert microlamports to SOL
-                                    formatted_value = f"{value / 1_000_000_000_000:.12f} SOL" 
+                                    formatted_value = f"{value / 1_000_000_000_000:.5f} SOL" 
                                 elif key == "tip_amount" and value is not None:
                                     # Convert lamports to SOL
-                                    formatted_value = f"{value / 1_000_000_000:.9f} SOL"
+                                    formatted_value = f"{value / 1_000_000_000:.5f} SOL"
                                 elif key == "buy_amount" and value is not None:
                                     # Format SOL amount with proper precision
-                                    formatted_value = f"{value:.3f} SOL"
+                                    formatted_value = f"{value:.2f} SOL"
                                 elif key == "buy_slippage" and value is not None:
                                     # Format percentage
-                                    formatted_value = f"{value:.1f}%"
+                                    formatted_value = f"{value*100:.1f}%"
                                 elif key == "take_profit_percentage" and value is not None:
                                     # Format percentage
-                                    formatted_value = f"{value:.1f}%"
+                                    formatted_value = f"{value*100:.1f}%"
                                 elif key == "percent_sell_amount" and value is not None:
                                     # Format percentage
-                                    formatted_value = f"{value:.1f}%"
+                                    formatted_value = f"{value*100:.1f}%"
+                                elif key == "token_amount" and value is not None:
+                                    # Format token amount in M, K, B, T
+                                    if value >= 1_000_000_000_000:
+                                        formatted_value = f"{value / 1_000_000_000_000:.2f}T"
+                                    elif value >= 1_000_000_000:
+                                        formatted_value = f"{value / 1_000_000_000:.2f}B"
+                                    elif value >= 1_000_000:
+                                        formatted_value = f"{value / 1_000_000:.2f}M"
+                                    else:
+                                        formatted_value = str(value)
                                 else:
                                     formatted_value = str(value)
                                 
@@ -325,9 +335,9 @@ class DeveloperManager:
                             
                             dev_configs.append({"address": dev, "config": formatted_config})
                             
-                        # split list into chunks of 100
-                        for i in range(0, len(dev_configs), 100):
-                            chunk = dev_configs[i:i+100]
+                        # split list into chunks of 20
+                        for i in range(0, len(dev_configs), 20):
+                            chunk = dev_configs[i:i+20]
                             asyncio.create_task(
                                 notify_bulk_snipe_add(
                                     self.discord_notifier, 
@@ -335,6 +345,8 @@ class DeveloperManager:
                                     extra_info={"Total Snipes": len(self.developer_whitelist)}
                                 )
                             )
+                            # sleep for 2 seconds to avoid hitting discord rate limits
+                            await asyncio.sleep(2)
                 
         except Exception as e:
             logger.error(f"Error fetching/refreshing developers from database: {e}")
