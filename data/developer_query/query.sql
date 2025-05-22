@@ -104,39 +104,47 @@ recent_active_devs AS (
     AND (tx_counts::json ->> 'swaps')::int >= 150  -- Require at least 150 swaps for latest token
 ),
 -- Count how many coins meet the volume thresholds for each developer
-dev_token_counts AS (
+dev_token_counts_from_recent_three AS (
   SELECT
     dev_address,
+    COUNT(*) FILTER (WHERE final_cumulative_volume >= 80000) AS coins_above_80k,    
     COUNT(*) FILTER (WHERE final_cumulative_volume >= 40000) AS coins_above_40k,
     COUNT(*) FILTER (WHERE final_cumulative_volume >= 25000) AS coins_above_25k
   FROM latest_coins
   WHERE rn <= 3  -- Only consider up to 3 most recent coins
   GROUP BY dev_address
 ),
-dev_classifications AS (
---   Criterion 1: Latest coin migrated (final market cap >= 55k)
+dev_token_counts_from_recent_two AS (
+  SELECT
+    dev_address,
+    COUNT(*) FILTER (WHERE final_cumulative_volume >= 80000) AS coins_above_80k,    
+    COUNT(*) FILTER (WHERE final_cumulative_volume >= 40000) AS coins_above_40k,
+    COUNT(*) FILTER (WHERE final_cumulative_volume >= 25000) AS coins_above_25k
+  FROM latest_coins
+  WHERE rn <= 2  -- Only consider up to 3 most recent coins
+  GROUP BY dev_address
+),
+dev_classifications AS (  
+--   Criterion 1: Latest 2 coins volume above 100k
   SELECT 
     rad.dev_address,
     rad.most_recent_mint_id,
     rad.latest_created,
     rad.final_cumulative_volume,
     rad.final_market_cap,
-    'Latest coin migrated (final mcap ≥ 55k)' AS qualification_type,
+    'Latest 2 coins volume ≥ 80k each' AS qualification_type,
     1 AS priority,
-    0.8 AS buy_amount,                 -- 0.8 SOL buy amount
+    0.7 AS buy_amount,                 -- 0.7 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
-    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
-    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    30000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.003 SOL)
+    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     15000000 AS token_amount,           -- Token amount to buy 15M
-    0.75 AS percent_sell_amount,       -- Sell 75% at take profit
-    0.6 AS take_profit_percentage      -- 60% take profit target
+    0.7 AS percent_sell_amount,       -- Sell 70% at take profit
+    0.55 AS take_profit_percentage      -- 55% take profit target
   FROM recent_active_devs rad
-  JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
-  WHERE rad.final_market_cap >= 55000
-    AND dtt.total_tokens > 1  -- Ensure developer has token history
-  
+  JOIN dev_token_counts_from_recent_two dtc ON rad.dev_address = dtc.dev_address
+  WHERE dtc.coins_above_80k >= 2    
   UNION ALL
-  
 --   Criterion 2: Latest coin volume above 100k
   SELECT 
     rad.dev_address,
@@ -145,14 +153,14 @@ dev_classifications AS (
     rad.final_cumulative_volume,
     rad.final_market_cap,
     'Latest coin volume ≥ 100k AND migrated (final mcap ≥ 55k)' AS qualification_type,
-    2 AS priority,
-    0.6 AS buy_amount,                 -- 0.6 SOL buy amount
+    4 AS priority,
+    0.45 AS buy_amount,                 -- 0.6 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
-    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     10000000 AS token_amount,           -- Token amount to buy 10M
-    0.65 AS percent_sell_amount,       -- Sell 65% at take profit
-    0.5 AS take_profit_percentage      -- 50% take profit target
+    0.80 AS percent_sell_amount,       -- Sell 80% at take profit
+    0.3 AS take_profit_percentage      -- 30% take profit target
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
   WHERE rad.final_cumulative_volume >= 100000 and rad.final_market_cap >= 55000
@@ -167,16 +175,16 @@ dev_classifications AS (
     rad.final_cumulative_volume,
     rad.final_market_cap,
     'Latest 2 coins volume ≥ 40k each' AS qualification_type,
-    3 AS priority,
-    0.5 AS buy_amount,                 -- 0.5 SOL buy amount
+    2 AS priority,
+    0.6 AS buy_amount,                 -- 0.6 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
-    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
-    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    30000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.003 SOL)
+    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     10000000 AS token_amount,           -- Token amount to buy 10M
-    0.5 AS percent_sell_amount,        -- Sell 50% at take profit
+    0.9 AS percent_sell_amount,        -- Sell 90% at take profit
     0.4 AS take_profit_percentage      -- 40% take profit target
   FROM recent_active_devs rad
-  JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
+  JOIN dev_token_counts_from_recent_two dtc ON rad.dev_address = dtc.dev_address
 --   Check if developer has at least 2 tokens with volume ≥ 40k each
   WHERE dtc.coins_above_40k >= 2
   
@@ -190,16 +198,16 @@ dev_classifications AS (
     rad.final_cumulative_volume,
     rad.final_market_cap,
     'Latest 3 coins volume ≥ 25k each' AS qualification_type,
-    4 AS priority,
+    3 AS priority,
     0.4 AS buy_amount,                 -- 0.4 SOL buy amount
     0.25 AS buy_slippage,              -- 25% slippage
-    10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
-    10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
+    20000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.002 SOL)
+    200000 AS tip_amount,               -- Tip amount in lamports (0.02 SOL)
     7500000 AS token_amount,            -- Token amount to buy 7.5M
-    0.4 AS percent_sell_amount,        -- Sell 40% at take profit
-    0.3 AS take_profit_percentage      -- 30% take profit target
+    1 AS percent_sell_amount,        -- Sell 100% at take profit
+    0.35 AS take_profit_percentage      -- 35% take profit target
   FROM recent_active_devs rad
-  JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
+  JOIN dev_token_counts_from_recent_three dtc ON rad.dev_address = dtc.dev_address
 --   Check if developer has at least 3 tokens with volume ≥ 25k each
   WHERE dtc.coins_above_25k >= 3
 ),
