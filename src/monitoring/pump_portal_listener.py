@@ -236,7 +236,7 @@ class PumpPortalListener(BaseTokenListener):
                 user=Pubkey.from_string(creator),
                 creator_vault=self._find_creator_vault(Pubkey.from_string(creator)),
                 uri=token_info.get("uri", ""),
-                bonding_curve=token_info.get("bondingCurveKey", ""),
+                bonding_curve=Pubkey.from_string(token_info.get("bondingCurveKey", "")),
                 associated_bonding_curve=self._find_associated_bonding_curve(
                     Pubkey.from_string(mint_address),
                     Pubkey.from_string(token_info.get("bondingCurveKey", "")),
