@@ -12,7 +12,7 @@ from solana.rpc.commitment import Processed
 from solana.rpc.types import TxOpts
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from solders.hash import Hash
-from solders.instruction import Instruction
+from solders.instruction import Instruction, AccountMeta
 from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
@@ -22,6 +22,8 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Jito sandwich protection public key
+JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront11111111111111111111111Wrecker")
 
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
@@ -165,10 +167,31 @@ class SolanaClient:
 
         # Add priority fee instructions if applicable
         if priority_fee is not None:
-            fee_instructions = [
-                set_compute_unit_limit(72_000),  # Default compute unit limit
-                set_compute_unit_price(priority_fee),
-            ]
+            # Create compute unit limit instruction with sandwich protection if using zeroslot tip manager
+            if self.zeroslot_tip_manager and tip_amount_lamports:
+                # Get the raw instruction data for compute unit limit
+                compute_unit_limit_ix = set_compute_unit_limit(72_000)
+                
+                # Add the jitodontfront account to the compute unit limit instruction
+                # Mark it as read-only for optimal performance
+                compute_unit_limit_ix_with_protection = Instruction(
+                    program_id=compute_unit_limit_ix.program_id,
+                    data=compute_unit_limit_ix.data,
+                    accounts=[AccountMeta(pubkey=JITO_DONT_FRONT_PUBKEY, is_signer=False, is_writable=False)]
+                )
+                
+                fee_instructions = [
+                    compute_unit_limit_ix_with_protection,
+                    set_compute_unit_price(priority_fee),
+                ]
+                
+                logger.info("Using Jito sandwich attack protection")
+            else:
+                fee_instructions = [
+                    set_compute_unit_limit(72_000),  # Default compute unit limit
+                    set_compute_unit_price(priority_fee),
+                ]
+            
             instructions = fee_instructions + instructions
 
         # If zeroslot tip manager is provided, add tip instruction at the end
