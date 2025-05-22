@@ -222,7 +222,8 @@ class DeveloperManager:
                     dev_data = {"timestamp": now, "params": {}}
                     
                     # Extract additional parameters if available in the query results
-                    param_names = ["buy_amount", "buy_slippage", "priority_fee", "tip_amount", "token_amount"]
+                    param_names = ["buy_amount", "buy_slippage", "priority_fee", "tip_amount", "token_amount", 
+                                  "percent_sell_amount", "take_profit_percentage"]
                     
                     # Check row length to determine available parameters
                     for i, param_name in enumerate(param_names, start=1):

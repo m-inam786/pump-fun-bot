@@ -798,7 +798,9 @@ class PumpTrader:
                 sell_result: TradeResult = await self.seller.execute(
                     token_info, 
                     entry_price=buy_result.price,
-                    token_balance=buy_result.amount * 10**TOKEN_DECIMALS
+                    token_balance=buy_result.amount * 10**TOKEN_DECIMALS,
+                    percent_sell_amount=token_info.trading_params.get("percent_sell_amount", None),
+                    take_profit_percentage=token_info.trading_params.get("take_profit_percentage", None),
                 )
             else:
                 logger.info(f"Waiting for {self.wait_time_after_buy} seconds before selling...")

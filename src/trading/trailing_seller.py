@@ -83,12 +83,17 @@ class TrailingTokenSeller(TokenSeller):
     async def execute(self, token_info: TokenInfo, 
                       token_balance: int,
                      entry_price: Optional[float] = None,
+                     percent_sell_amount: Optional[float] = None,
+                     take_profit_percentage: Optional[float] = None,
                      *args, **kwargs) -> TradeResult:
         """Execute trailing sell operation.
 
         Args:
             token_info: Token information
+            token_balance: Token balance in raw units
             entry_price: Entry price in SOL (if None, will be fetched)
+            percent_sell_amount: Override for percentage of tokens to sell at take profit
+            take_profit_percentage: Override for take profit percentage
 
         Returns:
             TradeResult with sell outcome
@@ -98,33 +103,6 @@ class TrailingTokenSeller(TokenSeller):
             associated_token_account = self.wallet.get_associated_token_address(
                 token_info.mint
             )
-
-            # Get token balance
-            # token_balance = 0  # Initialize to a default
-            # for attempt in range(self.balance_fetch_retries):
-            #     try:
-            #         token_balance = await self.client.get_token_account_balance(
-            #             associated_token_account
-            #         )
-            #         logger.info(
-            #             f"Successfully fetched token balance: {token_balance} "
-            #             f"on attempt {attempt + 1}/{self.balance_fetch_retries}"
-            #         )
-            #         break  # Exit loop on success
-            #     except Exception as e:
-            #         logger.warning(
-            #             f"Attempt {attempt + 1}/{self.balance_fetch_retries} to fetch token balance for "
-            #             f"{associated_token_account} failed: {e!s}"
-            #         )
-            #         if attempt < self.balance_fetch_retries - 1:
-            #             logger.info(f"Retrying in {self.balance_fetch_delay} seconds...")
-            #             await asyncio.sleep(self.balance_fetch_delay)
-            #         else:
-            #             logger.error(
-            #                 f"Failed to fetch token balance for {associated_token_account} "
-            #                 f"after {self.balance_fetch_retries} attempts."
-            #             )
-            #             raise # Re-raise the exception to be caught by the outer handler
             
             token_balance_decimal = token_balance / 10**TOKEN_DECIMALS  # TOKEN_DECIMALS
 
@@ -145,14 +123,25 @@ class TrailingTokenSeller(TokenSeller):
             else:
                 logger.info(f"Using provided entry price: {entry_price} SOL")
 
-            return await self._monitor_price_and_sell(token_info, token_balance, entry_price)
+            # Use developer-specific parameters if provided, otherwise use the defaults
+            sell_percent = percent_sell_amount if percent_sell_amount is not None else self.percent_sell_amount
+            profit_target = take_profit_percentage if take_profit_percentage is not None else self.take_profit_percentage
+            
+            if percent_sell_amount is not None:
+                logger.info(f"Using custom percent_sell_amount: {sell_percent}")
+            if take_profit_percentage is not None:
+                logger.info(f"Using custom take_profit_percentage: {profit_target}")
+
+            return await self._monitor_price_and_sell(token_info, token_balance, entry_price, 
+                                                    sell_percent, profit_target)
 
         except Exception as e:
             logger.error(f"Trailing sell operation failed: {e!s}")
             return TradeResult(success=False, error_message=str(e))
 
     async def _monitor_price_and_sell(
-        self, token_info: TokenInfo, token_balance: int, entry_price: float
+        self, token_info: TokenInfo, token_balance: int, entry_price: float,
+        percent_sell_amount: float = None, take_profit_percentage: float = None
     ) -> TradeResult:
         """Monitor price and sell based on trailing stop/take profit conditions.
 
@@ -160,17 +149,23 @@ class TrailingTokenSeller(TokenSeller):
             token_info: Token information
             token_balance: Token balance in raw units
             entry_price: Entry price in SOL
+            percent_sell_amount: Percentage of tokens to sell at take profit (overrides instance default)
+            take_profit_percentage: Take profit percentage (overrides instance default)
 
         Returns:
             TradeResult with sell outcome
         """
+        # Use provided parameters or defaults
+        sell_percent = percent_sell_amount if percent_sell_amount is not None else self.percent_sell_amount
+        profit_target_percentage = take_profit_percentage if take_profit_percentage is not None else self.take_profit_percentage
+        
         # Check if entry_price is a Decimal and handle accordingly
         from decimal import Decimal
         
         if isinstance(entry_price, Decimal):
             # If entry_price is Decimal, convert percentage values to Decimal
             highest_price = entry_price
-            take_profit_percentage_decimal = Decimal(str(self.take_profit_percentage))
+            take_profit_percentage_decimal = Decimal(str(profit_target_percentage))
             trailing_stop_percentage_decimal = Decimal(str(self.trailing_stop_percentage))
             
             take_profit_target = entry_price * (Decimal('1') + take_profit_percentage_decimal)
@@ -178,13 +173,14 @@ class TrailingTokenSeller(TokenSeller):
         else:
             # Handle as regular float values
             highest_price = entry_price
-            take_profit_target = entry_price * (1 + self.take_profit_percentage)
+            take_profit_target = entry_price * (1 + profit_target_percentage)
             trailing_stop = entry_price * (1 - self.trailing_stop_percentage)
 
         logger.info(f"Starting price monitoring with:")
         logger.info(f"  Entry price: {entry_price} SOL")
         logger.info(f"  Initial trailing stop: {trailing_stop} SOL")
         logger.info(f"  Take profit target: {take_profit_target} SOL")
+        logger.info(f"  Percent to sell at take profit: {sell_percent*100:.1f}%")
         
         # Result will be set by the callback function
         result_event = asyncio.Event()
@@ -238,7 +234,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check if we should sell
                             if price_decimal <= trailing_stop:
                                 logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=False)
                                 result_event.set()
                             
                             # Check take profit target
@@ -264,7 +260,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check if we should sell
                             if price <= trailing_stop:
                                 logger.info(f"Trailing stop triggered at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=False)
                                 result_event.set()
                             
                             # Check take profit target
@@ -300,7 +296,7 @@ class TrailingTokenSeller(TokenSeller):
                                 curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
                                 current_price = curve_state.calculate_price()
                                 
-                                sell_result = await self._execute_sell(token_info, token_balance, current_price)
+                                sell_result = await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
                                 result_event.set()
                                 break
                             finally:
@@ -388,7 +384,7 @@ class TrailingTokenSeller(TokenSeller):
                                     if await self._try_acquire_sell_lock():
                                         try:
                                             logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                                            return await self._execute_sell(token_info, token_balance, float(current_price))
+                                            return await self._execute_sell(token_info, token_balance, float(current_price), is_take_profit=False)
                                         finally:
                                             self._sell_in_progress.release()
                         
@@ -406,7 +402,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, float(current_price))
+                                    return await self._execute_sell(token_info, token_balance, float(current_price), is_take_profit=False)
                                 finally:
                                     self._sell_in_progress.release()
                         
@@ -442,7 +438,7 @@ class TrailingTokenSeller(TokenSeller):
                                     if await self._try_acquire_sell_lock():
                                         try:
                                             logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
-                                            return await self._execute_sell(token_info, token_balance, current_price)
+                                            return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
                                         finally:
                                             self._sell_in_progress.release()
                         
@@ -460,7 +456,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Trailing stop triggered at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, current_price)
+                                    return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
                                 finally:
                                     self._sell_in_progress.release()
                         
@@ -500,7 +496,8 @@ class TrailingTokenSeller(TokenSeller):
             return False
 
     async def _execute_sell(
-        self, token_info: TokenInfo, token_balance: int, current_price: float, is_take_profit: bool = False
+        self, token_info: TokenInfo, token_balance: int, current_price: float, 
+        is_take_profit: bool = False, percent_sell_amount: float = None
     ) -> TradeResult:
         """Execute the sell transaction.
 
@@ -508,10 +505,15 @@ class TrailingTokenSeller(TokenSeller):
             token_info: Token information
             token_balance: Token balance in raw units
             current_price: Current token price in SOL
+            is_take_profit: Whether this is a take profit trigger
+            percent_sell_amount: Override for percentage of tokens to sell (for take profit)
 
         Returns:
             TradeResult with sell outcome
         """
+        # Use provided sell percentage or default
+        sell_percent = percent_sell_amount if percent_sell_amount is not None else self.percent_sell_amount
+        
         # Double-check token balance to prevent selling already sold tokens
         associated_token_account = self.wallet.get_associated_token_address(
             token_info.mint
@@ -535,8 +537,8 @@ class TrailingTokenSeller(TokenSeller):
         # Check if this is a take profit trigger
         if is_take_profit:
             # Calculate the sell amount based on percent_sell_amount
-            sell_amount = int(token_balance * self.percent_sell_amount)
-            logger.info(f"Take profit reached - selling {self.percent_sell_amount * 100}% of tokens ({sell_amount / 10**TOKEN_DECIMALS})")
+            sell_amount = int(token_balance * sell_percent)
+            logger.info(f"Take profit reached - selling {sell_percent * 100}% of tokens ({sell_amount / 10**TOKEN_DECIMALS})")
         else:
             # For trailing stop or stagnation, sell the entire amount
             sell_amount = token_balance
@@ -572,7 +574,7 @@ class TrailingTokenSeller(TokenSeller):
                 price=current_price,
             )
             result.is_partial = is_take_profit
-            result.percent_sold = self.percent_sell_amount if is_take_profit else 1.0
+            result.percent_sold = sell_percent
             return result
         else:
             return TradeResult(

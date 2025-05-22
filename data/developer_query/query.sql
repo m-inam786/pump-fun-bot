@@ -127,7 +127,9 @@ dev_classifications AS (
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
     10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
-    15000000 AS token_amount            -- Token amount to buy 15M
+    15000000 AS token_amount,           -- Token amount to buy 15M
+    0.75 AS percent_sell_amount,       -- Sell 75% at take profit
+    0.6 AS take_profit_percentage      -- 60% take profit target
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
   WHERE rad.final_market_cap >= 55000
@@ -148,7 +150,9 @@ dev_classifications AS (
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
     10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
-    10000000 AS token_amount            -- Token amount to buy 10M
+    10000000 AS token_amount,           -- Token amount to buy 10M
+    0.65 AS percent_sell_amount,       -- Sell 65% at take profit
+    0.5 AS take_profit_percentage      -- 50% take profit target
   FROM recent_active_devs rad
   JOIN dev_total_tokens dtt ON rad.dev_address = dtt.dev_address
   WHERE rad.final_cumulative_volume >= 100000 and rad.final_market_cap >= 55000
@@ -168,7 +172,9 @@ dev_classifications AS (
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
     10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
-    10000000 AS token_amount            -- Token amount to buy 10M
+    10000000 AS token_amount,           -- Token amount to buy 10M
+    0.5 AS percent_sell_amount,        -- Sell 50% at take profit
+    0.4 AS take_profit_percentage      -- 40% take profit target
   FROM recent_active_devs rad
   JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
 --   Check if developer has at least 2 tokens with volume ≥ 40k each
@@ -189,7 +195,9 @@ dev_classifications AS (
     0.25 AS buy_slippage,              -- 25% slippage
     10000000 AS priority_fee,          -- Priority fee in microlamports (approx 0.001 SOL)
     10000 AS tip_amount,               -- Tip amount in lamports (0.001 SOL)
-    7500000 AS token_amount            -- Token amount to buy 7.5M
+    7500000 AS token_amount,            -- Token amount to buy 7.5M
+    0.4 AS percent_sell_amount,        -- Sell 40% at take profit
+    0.3 AS take_profit_percentage      -- 30% take profit target
   FROM recent_active_devs rad
   JOIN dev_token_counts dtc ON rad.dev_address = dtc.dev_address
 --   Check if developer has at least 3 tokens with volume ≥ 25k each
@@ -208,6 +216,8 @@ ranked_classifications AS (
     priority_fee,
     tip_amount,
     token_amount,
+    percent_sell_amount,
+    take_profit_percentage,
     ROW_NUMBER() OVER (PARTITION BY dev_address ORDER BY priority) AS priority_rank
   FROM dev_classifications
 )
@@ -219,6 +229,8 @@ SELECT
   priority_fee,           -- Priority fee in microlamports
   tip_amount,             -- Zero slot tip amount in lamports
   token_amount,            -- Token amount for extreme fast mode
+  percent_sell_amount,    -- Percentage to sell at take profit target
+  take_profit_percentage, -- Take profit target percentage
   most_recent_mint_id,
   qualification_type,
   ROUND(final_cumulative_volume) AS volume_usd,
