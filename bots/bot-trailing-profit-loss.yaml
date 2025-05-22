@@ -25,7 +25,7 @@ trade:
   
   # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
+  trailing_stop_percentage: 0.99 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
   take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
