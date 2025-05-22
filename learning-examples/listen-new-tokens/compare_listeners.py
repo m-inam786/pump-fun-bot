@@ -616,12 +616,14 @@ async def run_comparison_test(providers, test_duration=600):
 if __name__ == "__main__":
     # Read providers from environment variables
     providers = {
-        "provider_1": {
-            'wss': os.environ.get("SOLANA_NODE_WSS_ENDPOINT"),
+        "quicknode_geyser_provider": {
             'geyser': (
                 os.environ.get("GEYSER_ENDPOINT"),
                 os.environ.get("GEYSER_API_TOKEN")
             )
+        },
+        "quicknode_wss_provider": {
+            'wss': os.environ.get("SOLANA_NODE_WSS_ENDPOINT"),
         },
         # Add more providers to .env as needed
     }

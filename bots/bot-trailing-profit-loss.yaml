@@ -19,7 +19,7 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.04 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.003 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
@@ -34,7 +34,7 @@ trade:
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
   # 10M tokens
-  extreme_fast_token_amount: 500000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
+  extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false)
 
 # Priority fee configuration
 priority_fees:
@@ -70,13 +70,13 @@ zeroslot_tips:
   enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
   rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  tip_lamports: 20000000 # Amount of SOL to tip for faster transactions (20000000 = 0.02 SOL)
+  tip_lamports: 1000000 # Amount of SOL to tip for faster transactions (1000000 = 0.001 SOL)
 
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
-  listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
+  listener_type: "pump_portal" # Method for detecting new tokens: "pump_portal", "logs", "blocks", or "geyser"
   max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously

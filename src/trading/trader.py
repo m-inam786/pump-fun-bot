@@ -27,6 +27,7 @@ from monitoring.block_listener import BlockListener
 from monitoring.developer_manager import DeveloperManager
 from monitoring.geyser_listener import GeyserListener
 from monitoring.logs_listener import LogsListener
+from monitoring.pump_portal_listener import PumpPortalListener
 from monitoring.shared_websocket_listener import SharedWebsocketListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
@@ -63,6 +64,7 @@ class PumpTrader:
         geyser_endpoint: str | None = None,
         geyser_api_token: str | None = None,
         geyser_auth_type: str = "x-token",
+        pump_portal_enabled: bool = False,
 
         extreme_fast_mode: bool = False,
         extreme_fast_token_amount: int = 30,
@@ -145,6 +147,7 @@ class PumpTrader:
             geyser_endpoint: Geyser endpoint URL (required for geyser listener)
             geyser_api_token: Geyser API token (required for geyser listener)
             geyser_auth_type: Geyser authentication type ('x-token' or 'basic')
+            pump_portal_enabled: Whether to enable the PumpPortal listener in addition to the main listener
 
             extreme_fast_mode: Whether to enable extreme fast mode
             extreme_fast_token_amount: Maximum token amount for extreme fast mode
@@ -308,6 +311,7 @@ class PumpTrader:
         
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()
+        
         if listener_type == "geyser":
             if not geyser_endpoint or not geyser_api_token:
                 raise ValueError("Geyser endpoint and API token are required for geyser listener")
@@ -327,13 +331,19 @@ class PumpTrader:
                 self.developer_manager
             )
             logger.info("Using logsSubscribe listener for token monitoring")
-        else:
+        elif listener_type == "blocks":
             self.token_listener = BlockListener(
                 wss_endpoint, 
                 PumpAddresses.PROGRAM,
                 self.developer_manager
             )
             logger.info("Using blockSubscribe listener for token monitoring")
+        else:
+            self.token_listener = PumpPortalListener(
+                PumpAddresses.PROGRAM,
+                self.developer_manager
+            )
+            logger.info("Using PumpPortal listener for additional token monitoring")
             
         # Trading parameters
         self.buy_amount = buy_amount
@@ -495,6 +505,14 @@ class PumpTrader:
         
         # Stop all services
         logger.info("Stopping services...")
+        
+        # Stop token listener - especially important for PumpPortal to avoid blacklisting
+        try:
+            if hasattr(self.token_listener, 'stop') and callable(self.token_listener.stop):
+                logger.info(f"Stopping {self.token_listener.__class__.__name__}...")
+                await self.token_listener.stop()
+        except Exception as e:
+            logger.error(f"Error stopping token listener: {e!s}")
         
         # Stop SOL/USD converter
         try:
