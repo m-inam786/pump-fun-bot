@@ -33,7 +33,6 @@ trade:
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  # 10M tokens
   extreme_fast_token_amount: 50000 # Amount of tokens to buy (unused when extreme_fast_mode is false) (only valid if developer manager is false)
 
 # Priority fee configuration (only valid if developer manager is false)
@@ -67,7 +66,7 @@ discord:
 
 # Tip manager configuration (only valid if developer manager is false)
 use_tip_manager: true # Set to true to enable tip manager for faster transactions
-tip_manager: "nozomi" # Method for tip manager: "zeroslot" or "nozomi"
+tip_manager: "zeroslot" # Method for tip manager: "zeroslot" or "nozomi"
 tip_lamports: 2000000 # Amount of lamports to tip for faster transactions (2000000 = 0.002 SOL)
 
 # Zero slot tip manager configuration (only valid if developer manager is false)
