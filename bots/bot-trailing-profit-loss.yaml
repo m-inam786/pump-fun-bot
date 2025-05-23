@@ -46,7 +46,7 @@ priority_fees:
 
 # Developer manager configuration
 developer_manager:
-  enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
+  enabled: false # Set to true to enable multi-developer tracking via PostgreSQL
   db_host: "${PG_HOST}" # PostgreSQL host
   db_port: "${PG_PORT}" # PostgreSQL port
   db_name: "${PG_DATABASE}" # PostgreSQL database name
@@ -70,13 +70,13 @@ zeroslot_tips:
   enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
   rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  tip_lamports: 5000000 # Amount of SOL to tip for faster transactions (5000000 = 0.005 SOL)
+  tip_lamports: 2000000 # Amount of SOL to tip for faster transactions (2000000 = 0.002 SOL)
 
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
-  listener_type: "pump_portal" # Method for detecting new tokens: "pump_portal", "logs", "blocks", or "geyser"
+  listener_type: "geyser" # Method for detecting new tokens: "pump_portal", "logs", "blocks", or "geyser"
   max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
