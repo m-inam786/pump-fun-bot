@@ -33,7 +33,7 @@ trade:
 
   # EXTREME FAST mode configuration
   extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  extreme_fast_token_amount: 500000 # Amount of tokens to buy (unused when extreme_fast_mode is false) (only valid if developer manager is false)
+  extreme_fast_token_amount: 100000 # Amount of tokens to buy (unused when extreme_fast_mode is false) (only valid if developer manager is false)
 
 # Priority fee configuration (only valid if developer manager is false)
 priority_fees:
