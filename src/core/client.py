@@ -4,7 +4,7 @@ Solana client abstraction for blockchain operations.
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Union
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
@@ -18,6 +18,7 @@ from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 from core.zeroslot_tips import ZeroSlotTradeTipManager
+from core.nozomi_tips import NozomiTipStreamManager
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,16 +29,16 @@ JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront1111111111111111111111
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str, zeroslot_tip_manager: ZeroSlotTradeTipManager | None = None):
+    def __init__(self, rpc_endpoint: str, tip_manager: Union[ZeroSlotTradeTipManager, NozomiTipStreamManager, None] = None):
         """Initialize Solana client with RPC endpoint.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
-            zeroslot_tip_manager: ZeroSlotTradeTipManager instance (Optional)
+            tip_manager: Tip manager instance (either ZeroSlotTradeTipManager or NozomiTipStreamManager)
         """
         self.rpc_endpoint = rpc_endpoint
         self._client = None
-        self.zeroslot_tip_manager = zeroslot_tip_manager
+        self.tip_manager = tip_manager
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
@@ -155,6 +156,7 @@ class SolanaClient:
             skip_preflight: Whether to skip preflight checks.
             max_retries: Maximum number of retry attempts.
             priority_fee: Optional priority fee in microlamports.
+            tip_amount_lamports: Optional tip amount in lamports.
 
         Returns:
             Transaction signature.
@@ -167,8 +169,8 @@ class SolanaClient:
 
         # Add priority fee instructions if applicable
         if priority_fee is not None:
-            # Create compute unit limit instruction with sandwich protection if using zeroslot tip manager
-            if self.zeroslot_tip_manager and tip_amount_lamports:
+            # Create compute unit limit instruction with sandwich protection if using tip manager
+            if self.tip_manager and tip_amount_lamports:
                 # Get the raw instruction data for compute unit limit
                 compute_unit_limit_ix = set_compute_unit_limit(72_000)
                 
@@ -194,9 +196,11 @@ class SolanaClient:
             
             instructions = fee_instructions + instructions
 
-        # If zeroslot tip manager is provided, add tip instruction at the end
-        if self.zeroslot_tip_manager and tip_amount_lamports:
-            instructions.append(await self.zeroslot_tip_manager.get_tip_instruction(signer_keypair.pubkey(), tip_amount_lamports))
+        # If tip manager is provided, add tip instruction at the end
+        if self.tip_manager and tip_amount_lamports:
+            tip_instruction = await self.tip_manager.get_tip_instruction(signer_keypair.pubkey(), tip_amount_lamports)
+            if tip_instruction:
+                instructions.append(tip_instruction)
 
         recent_blockhash = await self.get_cached_blockhash()
         message = Message(instructions, signer_keypair.pubkey())
@@ -207,9 +211,9 @@ class SolanaClient:
                 tx_opts = TxOpts(
                     skip_preflight=skip_preflight, preflight_commitment=Processed
                 )
-                # use zeroslot rpc client if tip provided essentially only for buy transactions
-                if self.zeroslot_tip_manager and tip_amount_lamports:
-                    response = await self.zeroslot_tip_manager.send_transaction(transaction, tx_opts)
+                # Use tip manager's RPC client if tip is provided, otherwise use default client
+                if self.tip_manager and tip_amount_lamports:
+                    response = await self.tip_manager.send_transaction(transaction, tx_opts)
                 else:
                     response = await client.send_transaction(transaction, tx_opts)
                 return response.value

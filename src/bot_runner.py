@@ -115,11 +115,19 @@ async def start_bot(config_path: str):
         discord_worker_count=cfg.get("discord", {}).get("worker_count", 2),
         discord_retry_limit=cfg.get("discord", {}).get("retry_limit", 3),
 
+        # Tip manager settings
+        use_tip_manager=cfg.get("use_tip_manager", False),
+        tip_manager=cfg.get("tip_manager", "zeroslot"),
+        tip_lamports=cfg.get("tip_lamports", 2000000),
+        
         # Zero slot tip manager settings
-        enable_zeroslot_tips=cfg.get("zeroslot_tips", {}).get("enabled", False),
         zeroslot_tip_account=cfg.get("zeroslot_tips", {}).get("tip_account"),
         zeroslot_rpc_endpoint=cfg.get("zeroslot_tips", {}).get("rpc_url"),
-        zeroslot_tip_lamports=cfg.get("zeroslot_tips", {}).get("tip_lamports", 10000),
+        
+        # Nozomi tip manager settings
+        nozomi_websocket_url=cfg.get("nozomi_tips", {}).get("websocket_url"),
+        nozomi_tip_account=cfg.get("nozomi_tips", {}).get("tip_account"),
+        nozomi_rpc_url=cfg.get("nozomi_tips", {}).get("rpc_url"),
     )
     
     await trader.start()

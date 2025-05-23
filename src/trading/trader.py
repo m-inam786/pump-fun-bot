@@ -44,6 +44,7 @@ from utils.discord_notifications import (
     notify_error,
 )
 from utils.sol_to_usd_converter import SolToUsdConverter
+from core.nozomi_tips import NozomiTipStreamManager
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -128,11 +129,19 @@ class PumpTrader:
         # SOL/USD converter settings
         sol_price_update_interval: int = 480,  # 8 minutes
 
+        # Tip manager settings (unified for both zeroslot and nozomi)
+        use_tip_manager: bool = False,
+        tip_manager: str = "zeroslot",  # "zeroslot" or "nozomi"
+        tip_lamports: int = 10000,
+        
         # Zero slot tip stream settings
-        enable_zeroslot_tips: bool = False,
-        zeroslot_rpc_endpoint: str | None = None,
         zeroslot_tip_account: str | None = None,
-        zeroslot_tip_lamports: int = 10000,
+        zeroslot_rpc_endpoint: str | None = None,
+        
+        # Nozomi tip stream settings  
+        nozomi_websocket_url: str | None = None,
+        nozomi_tip_account: str | None = None,
+        nozomi_rpc_url: str | None = None,
     ):
         """Initialize the pump trader.
         Args:
@@ -195,26 +204,53 @@ class PumpTrader:
             
             sol_price_update_interval: Time between SOL price updates in seconds
 
-            enable_zeroslot_tips: Whether to enable Zero slot tips
-            zeroslot_rpc_endpoint: Zero slot RPC URL
+            use_tip_manager: Whether to enable tip manager for faster transactions
+            tip_manager: Type of tip manager to use ("zeroslot" or "nozomi")
+            tip_lamports: Default tip amount in lamports
+            
             zeroslot_tip_account: Zero slot tip account public key
+            zeroslot_rpc_endpoint: Zero slot RPC URL
+            
+            nozomi_websocket_url: Nozomi WebSocket URL
+            nozomi_tip_account: Nozomi tip account public key
+            nozomi_rpc_url: Nozomi RPC URL
         """
 
-        self.zeroslot_tip_manager = None
-        self.zeroslot_tip_lamports = zeroslot_tip_lamports
-        if enable_zeroslot_tips:
-            if zeroslot_tip_account and zeroslot_rpc_endpoint:
-                self.zeroslot_tip_manager = ZeroSlotTradeTipManager(
-                    rpc_endpoint=zeroslot_rpc_endpoint,
-                    tip_account_str=zeroslot_tip_account,
-                )
-                logger.info("Zero slot Tip Stream Manager enabled. Using solana client with zeroslot tip manager.")
-                self.solana_client = SolanaClient(rpc_endpoint, self.zeroslot_tip_manager)
+        # Initialize tip manager based on configuration
+        self.tip_manager_instance = None
+        self.tip_lamports = tip_lamports
+        self.tip_manager_type = tip_manager.lower() if tip_manager else "none"
+        
+        if use_tip_manager:
+            if self.tip_manager_type == "zeroslot":
+                if zeroslot_tip_account and zeroslot_rpc_endpoint:
+                    self.tip_manager_instance = ZeroSlotTradeTipManager(
+                        tip_account_str=zeroslot_tip_account,
+                        rpc_endpoint=zeroslot_rpc_endpoint,
+                    )
+                    logger.info("Zero slot Tip Manager enabled. Using Solana client with zeroslot tip manager.")
+                    self.solana_client = SolanaClient(rpc_endpoint, tip_manager=self.tip_manager_instance)
+                else:
+                    logger.warning("Zero slot tips enabled but tip account or RPC endpoint is missing. Manager not started. Using regular Solana client.")
+                    self.solana_client = SolanaClient(rpc_endpoint)
+            elif self.tip_manager_type == "nozomi":
+                if nozomi_websocket_url and nozomi_tip_account and nozomi_rpc_url:
+                    self.tip_manager_instance = NozomiTipStreamManager(
+                        websocket_url=nozomi_websocket_url,
+                        tip_account_str=nozomi_tip_account,
+                        tip_hardcap_sol=tip_lamports / 1_000_000_000,  # Convert lamports to SOL
+                        rpc_endpoint=nozomi_rpc_url,
+                    )
+                    logger.info("Nozomi Tip Manager enabled. Using Solana client with nozomi tip manager.")
+                    self.solana_client = SolanaClient(rpc_endpoint, tip_manager=self.tip_manager_instance)
+                else:
+                    logger.warning("Nozomi tips enabled but WebSocket URL, tip account, or RPC URL is missing. Manager not started. Using regular Solana client.")
+                    self.solana_client = SolanaClient(rpc_endpoint)
             else:
-                logger.warning("Zero slot tips enabled but WebSocket URL or tip account is missing. Manager not started. Using regular Solana client.")
+                logger.warning(f"Unknown tip manager type: {tip_manager}. Using regular Solana client.")
                 self.solana_client = SolanaClient(rpc_endpoint)
         else:
-            logger.info("Zero slot tips disabled. Using regular Solana client.")
+            logger.info("Tip manager disabled. Using regular Solana client.")
             self.solana_client = SolanaClient(rpc_endpoint)
 
         self.wallet = Wallet(private_key)
@@ -403,8 +439,8 @@ class PumpTrader:
         await self.sol_to_usd_converter.start()
         
         # Start Zero slot Tip Manager if enabled
-        if self.zeroslot_tip_manager:
-            await self.zeroslot_tip_manager.start()
+        if self.tip_manager_instance:
+            await self.tip_manager_instance.start()
 
         # Start the Discord notifier if enabled
         if self.discord_notifier:
@@ -521,9 +557,9 @@ class PumpTrader:
             logger.error(f"Error stopping SOL/USD converter: {e!s}")
 
         # Stop Zero slot Tip Manager if enabled
-        if self.zeroslot_tip_manager:
+        if self.tip_manager_instance:
             try:
-                await self.zeroslot_tip_manager.stop()
+                await self.tip_manager_instance.stop()
             except Exception as e:
                 logger.error(f"Error stopping Zero slot Tip Manager: {e!s}")
 
@@ -712,14 +748,14 @@ class PumpTrader:
                 buy_slippage = dev_params.get("buy_slippage", self.buy_slippage)
                 priority_fee = dev_params.get("priority_fee", 
                     self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0)
-                tip_amount = dev_params.get("tip_amount", self.zeroslot_tip_lamports)
+                tip_amount = dev_params.get("tip_amount", self.tip_lamports)
                 token_amount = dev_params.get("token_amount", self.extreme_fast_token_amount) if self.extreme_fast_mode else None
             else:
                 # Use bot's default configuration
                 buy_amount = self.buy_amount
                 buy_slippage = self.buy_slippage
                 priority_fee = self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0
-                tip_amount = self.zeroslot_tip_lamports
+                tip_amount = self.tip_lamports
                 token_amount = self.extreme_fast_token_amount if self.extreme_fast_mode else None
 
             # Buy token with appropriate parameters

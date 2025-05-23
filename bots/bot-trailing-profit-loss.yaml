@@ -65,12 +65,21 @@ discord:
   worker_count: 1
   retry_limit: 3 
 
+# Tip manager configuration (only valid if developer manager is false)
+use_tip_manager: true # Set to true to enable tip manager for faster transactions
+tip_manager: "nozomi" # Method for tip manager: "zeroslot" or "nozomi"
+tip_lamports: 2000000 # Amount of lamports to tip for faster transactions (2000000 = 0.002 SOL)
+
 # Zero slot tip manager configuration (only valid if developer manager is false)
 zeroslot_tips:
-  enabled: true # Set to true to enable Nozomi tips for faster transactions
   tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
   rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  tip_lamports: 2000000 # Amount of SOL to tip for faster transactions (2000000 = 0.002 SOL)
+  
+# Nozomi tip manager configuration (only valid if developer manager is false)
+nozomi_tips:
+  websocket_url: "${NOZOMI_WEBSOCKET_URL}" # Replace with Nozomi's WebSocket URL
+  tip_account: "${NOZOMI_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
+  rpc_url: "${NOZOMI_RPC_URL}" # Replace with Nozomi's RPC URL
 
 # Filters for token selection
 filters:
