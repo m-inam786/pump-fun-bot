@@ -66,12 +66,6 @@ class NozomiTipStreamManager:
                         logger.debug(f"Nozomi /ping successful (status {response.status}).")
                     else:
                         logger.warning(f"Nozomi /ping returned status {response.status}.")
-                # Also ping the RPC endpoint
-                response = await self.nozomi_rpc_client.is_connected()
-                if response:
-                    logger.debug(f"Nozomi RPC endpoint is connected.")
-                else:
-                    logger.warning(f"Nozomi RPC endpoint is disconnected.")
             except aiohttp.ClientError as e:
                 logger.warning(f"Error sending Nozomi /ping: {e!s}")
             except asyncio.TimeoutError:
