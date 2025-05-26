@@ -40,7 +40,7 @@ class ShrederSocketListener(BaseTokenListener):
         self.server = None
         self.connected_clients = set()
         
-    async def _handle_client(self, websocket, path):
+    async def _handle_client(self, websocket, path=None):
         """Handle incoming WebSocket client connections."""
         self.connected_clients.add(websocket)
         logger.info(f"New client connected from {websocket.remote_address}")
