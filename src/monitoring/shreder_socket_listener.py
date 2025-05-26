@@ -54,7 +54,7 @@ class ShrederSocketListener(BaseTokenListener):
             
             async for message in websocket:
                 try:
-                    logger.info(f"Raw message received from {websocket.remote_address}: {message[:200]}...")  # Log first 200 chars
+                    # logger.info(f"Raw message received from {websocket.remote_address}: {message[:200]}...")  # Log first 200 chars
                     data = json.loads(message)
                     logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
                     
@@ -121,12 +121,12 @@ class ShrederSocketListener(BaseTokenListener):
         try:
             # Check if this is transaction data with the expected structure
             if 'transaction' not in data or 'message' not in data['transaction']:
-                logger.debug(f"No transaction data found in: {json.dumps(data, indent=2)}")
+                logger.info(f"No transaction data found in: {json.dumps(data, indent=2)}")
                 return None
                 
             message = data['transaction']['message']
             if 'instructions' not in message:
-                logger.debug("No instructions found in transaction message")
+                logger.info("No instructions found in transaction message")
                 return None
                 
             # Look for create instruction (discriminator: [24, 30, 200, 40, 5, 28, 7, 119])
@@ -155,12 +155,12 @@ class ShrederSocketListener(BaseTokenListener):
                     if len(data_bytes) >= 8:
                         discriminators.append(data_bytes[:8])
             
-            logger.debug(f"No create instruction found. Found discriminators: {discriminators}")
+            logger.info(f"No create instruction found. Found discriminators: {discriminators}")
             return None
             
         except Exception as e:
             logger.error(f"Error extracting token info from Shreder data: {e}")
-            logger.debug(f"Data structure: {json.dumps(data, indent=2)}")
+            logger.info(f"Data structure: {json.dumps(data, indent=2)}")
             return None
 
     async def _parse_create_instruction_data(self, instruction_data: list, message: dict) -> TokenInfo | None:
