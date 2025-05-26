@@ -47,21 +47,32 @@ class ShrederSocketListener(BaseTokenListener):
         logger.info(f"New client connected from {websocket.remote_address}")
         
         try:
+            # Send a welcome message to confirm connection
+            welcome_msg = json.dumps({"type": "welcome", "message": "Connected to Python WebSocket server"})
+            await websocket.send(welcome_msg)
+            logger.info(f"Sent welcome message to client {websocket.remote_address}")
+            
             async for message in websocket:
                 try:
+                    logger.info(f"Raw message received from {websocket.remote_address}: {message[:200]}...")  # Log first 200 chars
                     data = json.loads(message)
-                    logger.debug(f"Received data from Node.js client: {data}")
+                    logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
                     
                     # Process the Shreder data
                     await self._process_shreder_data(data)
                     
                 except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON received: {e}")
+                    logger.error(f"Invalid JSON received from {websocket.remote_address}: {e}")
+                    logger.error(f"Raw message was: {message}")
                 except Exception as e:
-                    logger.error(f"Error processing message: {e}")
+                    logger.error(f"Error processing message from {websocket.remote_address}: {e}")
+                    logger.exception("Full traceback:")
                     
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client {websocket.remote_address} disconnected")
+        except Exception as e:
+            logger.error(f"Unexpected error in client handler for {websocket.remote_address}: {e}")
+            logger.exception("Full traceback:")
         finally:
             self.connected_clients.discard(websocket)
 
@@ -293,16 +304,26 @@ class ShrederSocketListener(BaseTokenListener):
         self._creator_address = creator_address
         
         logger.info(f"Starting WebSocket server on {self.socket_host}:{self.socket_port}")
+        logger.info(f"Token callback set: {token_callback is not None}")
+        logger.info(f"Creator address filter: {creator_address}")
         
         try:
-            # Start WebSocket server
+            # Start WebSocket server with additional configuration
             self.server = await websockets.serve(
                 self._handle_client,
                 self.socket_host,
-                self.socket_port
+                self.socket_port,
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=10
             )
             
             logger.info(f"WebSocket server listening on ws://{self.socket_host}:{self.socket_port}")
+            logger.info("Server configuration:")
+            logger.info(f"  - Host: {self.socket_host}")
+            logger.info(f"  - Port: {self.socket_port}")
+            logger.info(f"  - Ping interval: 20s")
+            logger.info(f"  - Ping timeout: 20s")
             logger.info("Waiting for Node.js Shreder client to connect...")
             
             # Keep the server running
@@ -310,6 +331,7 @@ class ShrederSocketListener(BaseTokenListener):
             
         except Exception as e:
             logger.error(f"WebSocket server error: {e}")
+            logger.exception("Full traceback:")
             raise
 
     async def stop(self):
