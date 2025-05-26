@@ -275,6 +275,7 @@ class TrailingTokenSeller(TokenSeller):
                 # Function to check for price stagnation
                 async def check_price_stagnation():
                     nonlocal sell_result
+                    
                     while not result_event.is_set():
                         current_time = asyncio.get_event_loop().time()
                         time_since_last_update = current_time - last_price_update_time
@@ -284,26 +285,54 @@ class TrailingTokenSeller(TokenSeller):
                             if not await self._try_acquire_sell_lock():
                                 await asyncio.sleep(1)
                                 continue
-
+                            
                             try:
-                                # Check again after acquiring lock in case another thread sold already
-                                if result_event.is_set():
-                                    break
+                                # Check if token has graduated before trying to get curve state
+                                if await self.curve_manager.is_token_graduated(token_info.bonding_curve):
+                                    logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
+                                    sell_result = TradeResult(
+                                        success=False,
+                                        error_message="Token graduated to Raydium",
+                                    )
+                                    result_event.set()
+                                    return
                                 
-                                # No price updates for the timeout period
-                                logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
                                 # Get current price for the sell
-                                curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
+                                curve_state = await self.curve_manager.get_curve_state(
+                                    token_info.bonding_curve
+                                )
                                 current_price = curve_state.calculate_price()
                                 
+                                logger.warning(
+                                    f"Price stagnation detected for {token_info.symbol}. "
+                                    f"No price update for {time_since_last_update:.1f}s. "
+                                    f"Current price: {current_price:.8f} SOL. Selling..."
+                                )
+                                
+                                # Execute the sell
                                 sell_result = await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
                                 result_event.set()
-                                break
+                                return
+                                
+                            except ValueError as e:
+                                if "graduated" in str(e).lower():
+                                    logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
+                                    sell_result = TradeResult(
+                                        success=False,
+                                        error_message="Token graduated to Raydium",
+                                    )
+                                    result_event.set()
+                                    return
+                                else:
+                                    logger.error(f"Error in stagnation check: {e}")
+                                    await asyncio.sleep(5)
+                            except Exception as e:
+                                logger.error(f"Unexpected error in stagnation check: {e}")
+                                await asyncio.sleep(5)
                             finally:
                                 self._sell_in_progress.release()
-                            
-                        # Check again in 1 second
-                        await asyncio.sleep(1)
+                        
+                        await asyncio.sleep(1)  # Check every second
                 
                 # Start the price listener (which registers with the shared listener)
                 await self.price_listener_instance.start_monitoring(
@@ -351,6 +380,14 @@ class TrailingTokenSeller(TokenSeller):
             
             while True:
                 try:
+                    # Check if token has graduated before trying to get curve state
+                    if await self.curve_manager.is_token_graduated(token_info.bonding_curve):
+                        logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
+                        return TradeResult(
+                            success=False,
+                            error_message="Token graduated to Raydium",
+                        )
+                    
                     # Get current price
                     curve_state = await self.curve_manager.get_curve_state(
                         token_info.bonding_curve
@@ -474,6 +511,16 @@ class TrailingTokenSeller(TokenSeller):
                 except asyncio.CancelledError:
                     logger.info("Price monitoring cancelled")
                     raise
+                except ValueError as e:
+                    if "graduated" in str(e).lower():
+                        logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
+                        return TradeResult(
+                            success=False,
+                            error_message="Token graduated to Raydium",
+                        )
+                    else:
+                        logger.error(f"Error monitoring price: {e!s}")
+                        await asyncio.sleep(self.check_interval)
                 except Exception as e:
                     logger.error(f"Error monitoring price: {e!s}")
                     await asyncio.sleep(self.check_interval)
