@@ -59,7 +59,7 @@ class ShrederSocketListener(BaseTokenListener):
                     logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
                     
                     # Process the Shreder data
-                    await self._process_shreder_data(data)
+                    await self._process_shreder_data(data['data'])
                     
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received from {websocket.remote_address}: {e}")
