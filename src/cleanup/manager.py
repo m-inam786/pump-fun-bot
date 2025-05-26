@@ -101,7 +101,6 @@ class AccountCleanupManager:
                     instructions,
                     self.wallet.keypair,
                     skip_preflight=True,
-                    priority_fee=priority_fee,
                 )
                 await self.client.confirm_transaction(tx_sig)
                 logger.info(f"Closed successfully: {ata}")
