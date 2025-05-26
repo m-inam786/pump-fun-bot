@@ -14,6 +14,7 @@ from monitoring.developer_manager import DeveloperManager
 from trading.base import TokenInfo
 from utils.logger import get_logger
 from solders.pubkey import Pubkey
+from core.pubkeys import SystemAddresses
 
 logger = get_logger(__name__)
 
@@ -107,37 +108,172 @@ class ShrederSocketListener(BaseTokenListener):
             TokenInfo if extraction successful, None otherwise
         """
         try:
-            # This is a placeholder - you'll need to adapt this based on 
-            # the actual structure of Shreder data
-            
-            # Example structure - adjust based on actual Shreder data format
-            if 'data' in data and 'transactions' in data['data']:
-                transaction_data = data['data']['transactions']
+            # Check if this is transaction data with the expected structure
+            if 'transaction' not in data or 'message' not in data['transaction']:
+                logger.debug(f"No transaction data found in: {json.dumps(data, indent=2)}")
+                return None
                 
-                # Extract relevant fields from the transaction
-                # This will need to be customized based on Shreder's data structure
-                if 'pumpfun' in transaction_data:
-                    pump_data = transaction_data['pumpfun']
+            message = data['transaction']['message']
+            if 'instructions' not in message:
+                logger.debug("No instructions found in transaction message")
+                return None
+                
+            # Look for create instruction (discriminator: [24, 30, 200, 40, 5, 28, 7, 119])
+            create_discriminator = [24, 30, 200, 40, 5, 28, 7, 119]
+            
+            for instruction in message['instructions']:
+                if 'data' not in instruction or 'data' not in instruction['data']:
+                    continue
                     
-                    # Create TokenInfo object
-                    # You'll need to map Shreder fields to TokenInfo fields
-                    token_info = TokenInfo(
-                        mint=Pubkey.from_string(pump_data.get('mint', '')),
-                        name=pump_data.get('name', 'Unknown'),
-                        symbol=pump_data.get('symbol', 'UNK'),
-                        uri=pump_data.get('uri', ''),
-                        user=Pubkey.from_string(pump_data.get('creator', '')),
-                        # Add other required fields based on your TokenInfo structure
-                    )
+                instruction_data = instruction['data']['data']
+                
+                # Check if this is a create instruction by comparing discriminator
+                if len(instruction_data) >= 8 and instruction_data[:8] == create_discriminator:
+                    logger.info("Found create instruction in transaction data")
                     
-                    return token_info
-                    
-            # Log the data structure for debugging
-            logger.debug(f"Shreder data structure: {json.dumps(data, indent=2)}")
+                    # Parse the create instruction data
+                    token_info = await self._parse_create_instruction_data(instruction_data, message)
+                    if token_info:
+                        return token_info
+                        
+            # If no create instruction found, log the discriminators we did find
+            discriminators = []
+            for instruction in message['instructions']:
+                if 'data' in instruction and 'data' in instruction['data']:
+                    data_bytes = instruction['data']['data']
+                    if len(data_bytes) >= 8:
+                        discriminators.append(data_bytes[:8])
+            
+            logger.debug(f"No create instruction found. Found discriminators: {discriminators}")
             return None
             
         except Exception as e:
             logger.error(f"Error extracting token info from Shreder data: {e}")
+            logger.debug(f"Data structure: {json.dumps(data, indent=2)}")
+            return None
+
+    async def _parse_create_instruction_data(self, instruction_data: list, message: dict) -> TokenInfo | None:
+        """Parse create instruction data to extract token information.
+        
+        Args:
+            instruction_data: The instruction data bytes as a list
+            message: The full transaction message for account lookups
+            
+        Returns:
+            TokenInfo if parsing successful, None otherwise
+        """
+        try:
+            # Convert list to bytes for easier parsing
+            data_bytes = bytes(instruction_data)
+            
+            # Skip the 8-byte discriminator
+            offset = 8
+            
+            # Parse the create instruction arguments: name, symbol, uri, creator
+            # Each string is prefixed with a 4-byte length
+            
+            # Parse name
+            if offset + 4 > len(data_bytes):
+                return None
+            name_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            offset += 4
+            
+            if offset + name_length > len(data_bytes):
+                return None
+            name = data_bytes[offset:offset+name_length].decode('utf-8')
+            offset += name_length
+            
+            # Parse symbol
+            if offset + 4 > len(data_bytes):
+                return None
+            symbol_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            offset += 4
+            
+            if offset + symbol_length > len(data_bytes):
+                return None
+            symbol = data_bytes[offset:offset+symbol_length].decode('utf-8')
+            offset += symbol_length
+            
+            # Parse uri
+            if offset + 4 > len(data_bytes):
+                return None
+            uri_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            offset += 4
+            
+            if offset + uri_length > len(data_bytes):
+                return None
+            uri = data_bytes[offset:offset+uri_length].decode('utf-8')
+            offset += uri_length
+            
+            # Parse creator (32 bytes)
+            if offset + 32 > len(data_bytes):
+                return None
+            creator_bytes = data_bytes[offset:offset+32]
+            creator = Pubkey(creator_bytes)
+            
+            # Extract account addresses from the transaction message
+            # We need to map the account indices to actual addresses
+            accounts = message.get('accountKeys', [])
+            if not accounts:
+                logger.error("No account keys found in transaction message")
+                return None
+                
+            # For create instruction, we need:
+            # - mint (account index 0)
+            # - user (signer, usually one of the accounts)
+            # We can derive bonding_curve and other PDAs
+            
+            if len(accounts) == 0:
+                logger.error("No accounts found in transaction")
+                return None
+                
+            # The mint is typically the first account in create transactions
+            mint = Pubkey.from_string(accounts[0])
+            
+            # Find the user (signer) - this requires checking the transaction structure
+            # For now, we'll use the creator as the user since they're often the same
+            user = creator
+            
+            # Derive the bonding curve PDA
+            bonding_curve, _ = Pubkey.find_program_address(
+                [b"bonding-curve", bytes(mint)],
+                Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")  # Pump program
+            )
+            
+            # Derive associated bonding curve (ATA)
+            from core.pubkeys import SystemAddresses
+            associated_bonding_curve, _ = Pubkey.find_program_address(
+                [
+                    bytes(bonding_curve),
+                    bytes(SystemAddresses.TOKEN_PROGRAM),
+                    bytes(mint),
+                ],
+                SystemAddresses.ASSOCIATED_TOKEN_PROGRAM,
+            )
+            
+            # Derive creator vault
+            creator_vault, _ = Pubkey.find_program_address(
+                [b"creator-vault", bytes(creator)],
+                Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")  # Pump program
+            )
+            
+            token_info = TokenInfo(
+                name=name,
+                symbol=symbol,
+                uri=uri,
+                mint=mint,
+                bonding_curve=bonding_curve,
+                associated_bonding_curve=associated_bonding_curve,
+                user=user,
+                creator=creator,
+                creator_vault=creator_vault,
+            )
+            
+            logger.info(f"Successfully parsed token info: {name} ({symbol}) by {creator}")
+            return token_info
+            
+        except Exception as e:
+            logger.error(f"Error parsing create instruction data: {e}")
             return None
 
     async def listen_for_tokens(
