@@ -26,13 +26,35 @@ async def subscribe_transactions():
     entrypoint = "fra1.shreder.xyz:9991"
     
     try:
-        # Create gRPC channel
-        channel = grpc.aio.insecure_channel(entrypoint)
+        # Create gRPC channel with options for better debugging
+        options = [
+            ('grpc.keepalive_time_ms', 30000),
+            ('grpc.keepalive_timeout_ms', 5000),
+            ('grpc.keepalive_permit_without_calls', True),
+            ('grpc.http2.max_pings_without_data', 0),
+            ('grpc.http2.min_time_between_pings_ms', 10000),
+            ('grpc.http2.min_ping_interval_without_data_ms', 300000)
+        ]
+        
+        channel = grpc.aio.insecure_channel(entrypoint, options=options)
         
         # Create client stub
         client = shredstream_pb2_grpc.ShrederServiceStub(channel)
         
         print(f"Connecting to {entrypoint}...")
+        
+        # Test the connection first
+        try:
+            # Set a timeout for the connection test
+            await asyncio.wait_for(channel.channel_ready(), timeout=10.0)
+            print("✅ Channel is ready!")
+        except asyncio.TimeoutError:
+            print("❌ Connection timeout - server may be unreachable")
+            return
+        except Exception as e:
+            print(f"❌ Connection failed: {e}")
+            return
+        
         print("Subscribing to transactions stream...")
         
         # Create the subscription request with filters
@@ -47,42 +69,62 @@ async def subscribe_transactions():
             transactions={"pumpfun": filter_transactions}
         )
         
+        print(f"📤 Sending subscription request with filter: {request.transactions}")
+        
         # Create an async generator to send the request
         async def request_generator():
             yield request
         
-        # Subscribe to transactions stream
-        response_stream = client.SubscribeTransactions(request_generator())
-        
-        async for message in response_stream:
-            try:
-                # Extract transaction data
-                if message.transaction and message.transaction.transaction:
-                    transaction = message.transaction.transaction
+        # Subscribe to transactions stream with timeout
+        try:
+            response_stream = client.SubscribeTransactions(request_generator())
+            print("🔄 Waiting for messages...")
+            
+            message_count = 0
+            async for message in response_stream:
+                try:
+                    message_count += 1
+                    print(f"📨 Received message #{message_count}")
                     
-                    # Get the first signature and encode it with base58
-                    if transaction.signatures:
-                        signature_bytes = transaction.signatures[0]
-                        signature_b58 = base58.b58encode(signature_bytes).decode('utf-8')
+                    # Extract transaction data
+                    if message.transaction and message.transaction.transaction:
+                        transaction = message.transaction.transaction
                         
-                        print(f"Filters: {list(message.filters)}, Sig: {signature_b58}")
+                        # Get the first signature and encode it with base58
+                        if transaction.signatures:
+                            signature_bytes = transaction.signatures[0]
+                            signature_b58 = base58.b58encode(signature_bytes).decode('utf-8')
+                            
+                            print(f"Filters: {list(message.filters)}, Sig: {signature_b58}")
+                        else:
+                            print(f"Filters: {list(message.filters)}, Sig: No signatures")
                     else:
-                        print(f"Filters: {list(message.filters)}, Sig: No signatures")
-                else:
-                    print(f"Filters: {list(message.filters)}, Sig: No transaction data")
+                        print(f"Filters: {list(message.filters)}, Sig: No transaction data")
+                        
+                except Exception as e:
+                    print(f"Error processing message: {e}")
+                    continue
                     
-            except Exception as e:
-                print(f"Error processing message: {e}")
-                continue
+        except grpc.aio.AioRpcError as e:
+            print(f"❌ gRPC stream error: {e}")
+            print(f"   Status code: {e.code()}")
+            print(f"   Details: {e.details()}")
+        except Exception as e:
+            print(f"❌ Unexpected stream error: {e}")
                 
     except grpc.aio.AioRpcError as e:
-        print(f"gRPC error: {e}")
+        print(f"❌ gRPC error: {e}")
+        print(f"   Status code: {e.code()}")
+        print(f"   Details: {e.details()}")
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        print("\n🛑 Shutting down...")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"❌ Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if 'channel' in locals():
+            print("🔌 Closing channel...")
             await channel.close()
 
 
@@ -91,7 +133,7 @@ def main():
     try:
         asyncio.run(subscribe_transactions())
     except KeyboardInterrupt:
-        print("\nExiting...")
+        print("\n👋 Exiting...")
 
 
 if __name__ == "__main__":
