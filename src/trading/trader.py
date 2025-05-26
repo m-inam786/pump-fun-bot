@@ -28,6 +28,7 @@ from monitoring.geyser_listener import GeyserListener
 from monitoring.logs_listener import LogsListener
 from monitoring.pump_portal_listener import PumpPortalListener
 from monitoring.shared_websocket_listener import SharedWebsocketListener
+from monitoring.shreder_socket_listener import ShrederSocketListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
@@ -64,6 +65,10 @@ class PumpTrader:
         geyser_endpoint: str | None = None,
         geyser_api_token: str | None = None,
         geyser_auth_type: str = "x-token",
+        
+        # Shreder socket configuration
+        shreder_socket_host: str = "localhost",
+        shreder_socket_port: int = 8765,
         
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
@@ -143,10 +148,13 @@ class PumpTrader:
             buy_slippage: Slippage tolerance for buys
             sell_slippage: Slippage tolerance for sells
 
-            listener_type: Type of listener to use ('logs', 'blocks', or 'geyser')
+            listener_type: Type of listener to use ('logs', 'blocks', 'geyser', or 'shreder_socket')
             geyser_endpoint: Geyser endpoint URL (required for geyser listener)
             geyser_api_token: Geyser API token (required for geyser listener)
             geyser_auth_type: Geyser authentication type ('x-token' or 'basic')
+
+            shreder_socket_host: WebSocket server host for Shreder listener
+            shreder_socket_port: WebSocket server port for Shreder listener
 
             enable_dynamic_priority_fee: Whether to enable dynamic priority fees
             enable_fixed_priority_fee: Whether to enable fixed priority fees
@@ -332,6 +340,13 @@ class PumpTrader:
                 self.developer_manager
             )
             logger.info("Using Geyser listener for token monitoring")
+        elif listener_type == "shreder_socket":
+            self.token_listener = ShrederSocketListener(
+                socket_host=shreder_socket_host,
+                socket_port=shreder_socket_port,
+                developer_manager=self.developer_manager
+            )
+            logger.info(f"Using Shreder Socket listener for token monitoring on {shreder_socket_host}:{shreder_socket_port}")
         elif listener_type == "logs":
             self.token_listener = LogsListener(
                 wss_endpoint, 

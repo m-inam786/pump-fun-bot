@@ -7,6 +7,7 @@ from monitoring.block_listener import BlockListener
 from monitoring.geyser_listener import GeyserListener
 from monitoring.logs_listener import LogsListener
 from monitoring.pump_portal_listener import PumpPortalListener
+from monitoring.shreder_socket_listener import ShrederSocketListener
 
 __all__ = [
     "BaseTokenListener",
@@ -14,4 +15,5 @@ __all__ = [
     "GeyserListener",
     "LogsListener",
     "PumpPortalListener",
+    "ShrederSocketListener",
 ]

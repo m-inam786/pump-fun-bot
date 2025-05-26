@@ -17,6 +17,12 @@ geyser:
   api_token: "${GEYSER_API_TOKEN}"
   auth_type: "x-token" # or "basic"
 
+# Shreder socket configuration (alternative to Geyser)
+# Uncomment to use Shreder data via Node.js client
+shreder_socket:
+  host: "localhost" # WebSocket server host
+  port: 8765 # WebSocket server port
+
 # Trading parameters
 trade:
   buy_amount: 0.02 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
@@ -75,7 +81,7 @@ nonce_account:
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
-  listener_type: "geyser" # Method for detecting new tokens: "pump_portal", "logs", "blocks", or "geyser"
+  listener_type: "shreder_socket" # Method for detecting new tokens: "pump_portal", "logs", "blocks", "geyser", or "shreder_socket"
   max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
