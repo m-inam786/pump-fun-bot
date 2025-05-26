@@ -189,7 +189,7 @@ class ShrederSocketListener(BaseTokenListener):
                     if len(data_bytes) >= 8:
                         discriminators.append(list(data_bytes[:8]))
             
-            logger.info(f"No create instruction found in Shreder data. Found discriminators: {discriminators}")
+            logger.debug(f"No create instruction found in Shreder data. Found discriminators: {discriminators}")
             return None
             
         except Exception as e:
@@ -300,7 +300,7 @@ class ShrederSocketListener(BaseTokenListener):
                 creator_vault=creator_vault,
             )
             
-            logger.info(f"Successfully parsed token info from Shreder data: {name} ({symbol}) by {creator}")
+            logger.info(f"Successfully parsed token info from Shreder data: {token_info.to_dict()}")
             return token_info
             
         except Exception as e:
