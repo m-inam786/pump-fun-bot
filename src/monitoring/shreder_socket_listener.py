@@ -59,7 +59,7 @@ class ShrederSocketListener(BaseTokenListener):
                     # logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
                     
                     # Process the Shreder data
-                    await self._process_shreder_data(data['data'])
+                    await self._process_shreder_data(data)
                     
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received from {websocket.remote_address}: {e}")
@@ -108,75 +108,106 @@ class ShrederSocketListener(BaseTokenListener):
                     
         except Exception as e:
             logger.error(f"Error processing Shreder data: {e}")
+            logger.exception("Full traceback:")
+
+    def _convert_buffer_to_bytes(self, buffer_obj):
+        """Convert Node.js Buffer object to Python bytes.
+        
+        Args:
+            buffer_obj: Buffer object with 'type': 'Buffer' and 'data': [...]
+            
+        Returns:
+            bytes object
+        """
+        if isinstance(buffer_obj, dict) and buffer_obj.get('type') == 'Buffer':
+            return bytes(buffer_obj['data'])
+        return buffer_obj
 
     async def _extract_token_info(self, data) -> TokenInfo | None:
         """Extract TokenInfo from Shreder data.
         
         Args:
-            data: Raw Shreder data
+            data: Raw Shreder data from Node.js client
             
         Returns:
             TokenInfo if extraction successful, None otherwise
         """
         try:
-            # Check if this is transaction data with the expected structure
-            if 'transaction' not in data or 'message' not in data['transaction']:
-                logger.info(f"No transaction data found in: {json.dumps(data, indent=2)}")
+            # Check if this is the expected Shreder data structure
+            if 'transaction' not in data:
+                logger.info(f"No transaction data found in Shreder data")
                 return None
                 
-            message = data['transaction']['message']
+            transaction_data = data['transaction']
+            if 'transaction' not in transaction_data:
+                logger.info(f"No nested transaction found in transaction data")
+                return None
+                
+            transaction = transaction_data['transaction']
+            if 'message' not in transaction:
+                logger.info("No message found in transaction")
+                return None
+                
+            message = transaction['message']
             if 'instructions' not in message:
                 logger.info("No instructions found in transaction message")
                 return None
                 
+            # Convert account keys from Buffer objects to bytes
+            account_keys = []
+            if 'accountKeys' in message:
+                for account_key in message['accountKeys']:
+                    account_bytes = self._convert_buffer_to_bytes(account_key)
+                    account_keys.append(account_bytes)
+            
             # Look for create instruction (discriminator: [24, 30, 200, 40, 5, 28, 7, 119])
             create_discriminator = [24, 30, 200, 40, 5, 28, 7, 119]
             
             for instruction in message['instructions']:
-                if 'data' not in instruction or 'data' not in instruction['data']:
+                if 'data' not in instruction:
                     continue
                     
-                instruction_data = instruction['data']['data']
+                # Convert instruction data from Buffer to bytes
+                instruction_data_buffer = instruction['data']
+                instruction_data = self._convert_buffer_to_bytes(instruction_data_buffer)
                 
                 # Check if this is a create instruction by comparing discriminator
-                if len(instruction_data) >= 8 and instruction_data[:8] == create_discriminator:
-                    logger.info("Found create instruction in transaction data")
+                if len(instruction_data) >= 8 and list(instruction_data[:8]) == create_discriminator:
+                    logger.info("Found create instruction in Shreder transaction data")
                     
                     # Parse the create instruction data
-                    token_info = await self._parse_create_instruction_data(instruction_data, message)
+                    token_info = await self._parse_create_instruction_data(instruction_data, account_keys)
                     if token_info:
                         return token_info
                         
             # If no create instruction found, log the discriminators we did find
             discriminators = []
             for instruction in message['instructions']:
-                if 'data' in instruction and 'data' in instruction['data']:
-                    data_bytes = instruction['data']['data']
+                if 'data' in instruction:
+                    data_bytes = self._convert_buffer_to_bytes(instruction['data'])
                     if len(data_bytes) >= 8:
-                        discriminators.append(data_bytes[:8])
+                        discriminators.append(list(data_bytes[:8]))
             
-            logger.info(f"No create instruction found. Found discriminators: {discriminators}")
+            logger.info(f"No create instruction found in Shreder data. Found discriminators: {discriminators}")
             return None
             
         except Exception as e:
             logger.error(f"Error extracting token info from Shreder data: {e}")
-            logger.info(f"Data structure: {json.dumps(data, indent=2)}")
+            logger.exception("Full traceback:")
+            logger.info(f"Data structure: {json.dumps(data, indent=2)[:1000]}...")
             return None
 
-    async def _parse_create_instruction_data(self, instruction_data: list, message: dict) -> TokenInfo | None:
+    async def _parse_create_instruction_data(self, instruction_data: bytes, account_keys: list) -> TokenInfo | None:
         """Parse create instruction data to extract token information.
         
         Args:
-            instruction_data: The instruction data bytes as a list
-            message: The full transaction message for account lookups
+            instruction_data: The instruction data as bytes
+            account_keys: List of account keys as bytes
             
         Returns:
             TokenInfo if parsing successful, None otherwise
         """
         try:
-            # Convert list to bytes for easier parsing
-            data_bytes = bytes(instruction_data)
-            
             # Skip the 8-byte discriminator
             offset = 8
             
@@ -184,65 +215,53 @@ class ShrederSocketListener(BaseTokenListener):
             # Each string is prefixed with a 4-byte length
             
             # Parse name
-            if offset + 4 > len(data_bytes):
+            if offset + 4 > len(instruction_data):
                 return None
-            name_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            name_length = int.from_bytes(instruction_data[offset:offset+4], 'little')
             offset += 4
             
-            if offset + name_length > len(data_bytes):
+            if offset + name_length > len(instruction_data):
                 return None
-            name = data_bytes[offset:offset+name_length].decode('utf-8')
+            name = instruction_data[offset:offset+name_length].decode('utf-8')
             offset += name_length
             
             # Parse symbol
-            if offset + 4 > len(data_bytes):
+            if offset + 4 > len(instruction_data):
                 return None
-            symbol_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            symbol_length = int.from_bytes(instruction_data[offset:offset+4], 'little')
             offset += 4
             
-            if offset + symbol_length > len(data_bytes):
+            if offset + symbol_length > len(instruction_data):
                 return None
-            symbol = data_bytes[offset:offset+symbol_length].decode('utf-8')
+            symbol = instruction_data[offset:offset+symbol_length].decode('utf-8')
             offset += symbol_length
             
             # Parse uri
-            if offset + 4 > len(data_bytes):
+            if offset + 4 > len(instruction_data):
                 return None
-            uri_length = int.from_bytes(data_bytes[offset:offset+4], 'little')
+            uri_length = int.from_bytes(instruction_data[offset:offset+4], 'little')
             offset += 4
             
-            if offset + uri_length > len(data_bytes):
+            if offset + uri_length > len(instruction_data):
                 return None
-            uri = data_bytes[offset:offset+uri_length].decode('utf-8')
+            uri = instruction_data[offset:offset+uri_length].decode('utf-8')
             offset += uri_length
             
             # Parse creator (32 bytes)
-            if offset + 32 > len(data_bytes):
+            if offset + 32 > len(instruction_data):
                 return None
-            creator_bytes = data_bytes[offset:offset+32]
+            creator_bytes = instruction_data[offset:offset+32]
             creator = Pubkey(creator_bytes)
             
             # Extract account addresses from the transaction message
-            # We need to map the account indices to actual addresses
-            accounts = message.get('accountKeys', [])
-            if not accounts:
-                logger.error("No account keys found in transaction message")
-                return None
-                
-            # For create instruction, we need:
-            # - mint (account index 0)
-            # - user (signer, usually one of the accounts)
-            # We can derive bonding_curve and other PDAs
-            
-            if len(accounts) == 0:
+            if len(account_keys) == 0:
                 logger.error("No accounts found in transaction")
                 return None
                 
             # The mint is typically the first account in create transactions
-            mint = Pubkey.from_string(accounts[0])
+            mint = Pubkey(account_keys[0])
             
-            # Find the user (signer) - this requires checking the transaction structure
-            # For now, we'll use the creator as the user since they're often the same
+            # Find the user (signer) - use the creator as the user since they're often the same
             user = creator
             
             # Derive the bonding curve PDA
@@ -280,11 +299,12 @@ class ShrederSocketListener(BaseTokenListener):
                 creator_vault=creator_vault,
             )
             
-            logger.info(f"Successfully parsed token info: {name} ({symbol}) by {creator}")
+            logger.info(f"Successfully parsed token info from Shreder data: {name} ({symbol}) by {creator}")
             return token_info
             
         except Exception as e:
-            logger.error(f"Error parsing create instruction data: {e}")
+            logger.error(f"Error parsing create instruction data from Shreder: {e}")
+            logger.exception("Full traceback:")
             return None
 
     async def listen_for_tokens(
