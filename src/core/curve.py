@@ -88,29 +88,6 @@ class BondingCurveManager:
         """
         self.client = client
 
-    async def is_token_graduated(self, curve_address: Pubkey) -> bool:
-        """Check if a token has graduated from the bonding curve.
-
-        Args:
-            curve_address: Address of the bonding curve account
-
-        Returns:
-            True if token has graduated, False otherwise
-        """
-        try:
-            account = await self.client.get_account_info(curve_address)
-            if not account.data:
-                # If account has no data, it likely means the token has graduated
-                return True
-
-            curve_state = BondingCurveState(account.data)
-            return curve_state.complete
-
-        except Exception as e:
-            logger.warning(f"Could not check graduation status for {curve_address}: {e}")
-            # If we can't access the account, assume it has graduated
-            return True
-
     async def get_curve_state(self, curve_address: Pubkey) -> BondingCurveState:
         """Get the state of a bonding curve.
 
@@ -121,20 +98,14 @@ class BondingCurveManager:
             Bonding curve state
 
         Raises:
-            ValueError: If curve data is invalid or token has graduated
+            ValueError: If curve data is invalid
         """
         try:
             account = await self.client.get_account_info(curve_address)
             if not account.data:
-                raise ValueError(f"Token has graduated - bonding curve account {curve_address} has no data")
+                raise ValueError(f"No data in bonding curve account {curve_address}")
 
-            curve_state = BondingCurveState(account.data)
-            
-            # Check if the token has graduated
-            if curve_state.complete:
-                raise ValueError(f"Token has graduated - bonding curve {curve_address} is complete")
-
-            return curve_state
+            return BondingCurveState(account.data)
 
         except Exception as e:
             logger.error(f"Failed to get curve state: {e!s}")

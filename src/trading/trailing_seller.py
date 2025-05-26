@@ -189,6 +189,7 @@ class TrailingTokenSeller(TokenSeller):
         # Timeout to sell if no price changes occur
         price_stagnation_timeout = self.stagnation_timeout
         last_price_update_time = asyncio.get_event_loop().time()
+        last_known_price = None  # Track the last known price for stagnation check fallback
         timeout_task = None
         
         if self.use_websocket:
@@ -205,15 +206,16 @@ class TrailingTokenSeller(TokenSeller):
                 
                 # Define the price update callback
                 async def on_price_update(price: float) -> None:
-                    nonlocal highest_price, trailing_stop, sell_result, last_price_update_time
+                    nonlocal highest_price, trailing_stop, sell_result, last_price_update_time, last_known_price
                     
                     # Check if a sell is already in progress or completed
                     if result_event.is_set() or not await self._try_acquire_sell_lock():
                         return  # Skip if sell is already in progress/completed or lock couldn't be acquired
                     
                     try:
-                        # Update the last price update time
+                        # Update the last price update time and last known price
                         last_price_update_time = asyncio.get_event_loop().time()
+                        last_known_price = price
                         
                         # Convert price to Decimal if entry_price is Decimal
                         if isinstance(entry_price, Decimal):
@@ -274,7 +276,7 @@ class TrailingTokenSeller(TokenSeller):
                 
                 # Function to check for price stagnation
                 async def check_price_stagnation():
-                    nonlocal sell_result
+                    nonlocal sell_result, last_known_price
                     
                     while not result_event.is_set():
                         current_time = asyncio.get_event_loop().time()
@@ -285,54 +287,39 @@ class TrailingTokenSeller(TokenSeller):
                             if not await self._try_acquire_sell_lock():
                                 await asyncio.sleep(1)
                                 continue
-                            
+
                             try:
-                                # Check if token has graduated before trying to get curve state
-                                if await self.curve_manager.is_token_graduated(token_info.bonding_curve):
-                                    logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
-                                    sell_result = TradeResult(
-                                        success=False,
-                                        error_message="Token graduated to Raydium",
-                                    )
-                                    result_event.set()
-                                    return
+                                # Check again after acquiring lock in case another thread sold already
+                                if result_event.is_set():
+                                    break
                                 
-                                # Get current price for the sell
-                                curve_state = await self.curve_manager.get_curve_state(
-                                    token_info.bonding_curve
-                                )
-                                current_price = curve_state.calculate_price()
+                                # No price updates for the timeout period
+                                logger.info(f"No price changes detected for {price_stagnation_timeout} seconds, selling token")
                                 
-                                logger.warning(
-                                    f"Price stagnation detected for {token_info.symbol}. "
-                                    f"No price update for {time_since_last_update:.1f}s. "
-                                    f"Current price: {current_price:.8f} SOL. Selling..."
-                                )
+                                # Try to get current price, but handle curve state errors gracefully
+                                current_price = None
+                                try:
+                                    curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
+                                    current_price = curve_state.calculate_price()
+                                    logger.info(f"Using current price for stagnation sell: {current_price:.8f} SOL")
+                                except (ValueError, Exception) as e:
+                                    # If we can't get the current price, use the last known price or entry price
+                                    if last_known_price is not None:
+                                        current_price = last_known_price
+                                        logger.warning(f"Could not fetch current price ({e}), using last known price: {current_price:.8f} SOL")
+                                    else:
+                                        # Fallback to entry price if no last known price
+                                        current_price = float(entry_price) if isinstance(entry_price, Decimal) else entry_price
+                                        logger.warning(f"Could not fetch current price ({e}), using entry price: {current_price:.8f} SOL")
                                 
-                                # Execute the sell
                                 sell_result = await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
                                 result_event.set()
-                                return
-                                
-                            except ValueError as e:
-                                if "graduated" in str(e).lower():
-                                    logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
-                                    sell_result = TradeResult(
-                                        success=False,
-                                        error_message="Token graduated to Raydium",
-                                    )
-                                    result_event.set()
-                                    return
-                                else:
-                                    logger.error(f"Error in stagnation check: {e}")
-                                    await asyncio.sleep(5)
-                            except Exception as e:
-                                logger.error(f"Unexpected error in stagnation check: {e}")
-                                await asyncio.sleep(5)
+                                break
                             finally:
                                 self._sell_in_progress.release()
-                        
-                        await asyncio.sleep(1)  # Check every second
+                            
+                        # Check again in 1 second
+                        await asyncio.sleep(1)
                 
                 # Start the price listener (which registers with the shared listener)
                 await self.price_listener_instance.start_monitoring(
@@ -380,19 +367,41 @@ class TrailingTokenSeller(TokenSeller):
             
             while True:
                 try:
-                    # Check if token has graduated before trying to get curve state
-                    if await self.curve_manager.is_token_graduated(token_info.bonding_curve):
-                        logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
-                        return TradeResult(
-                            success=False,
-                            error_message="Token graduated to Raydium",
+                    # Try to get current price, handle curve state errors gracefully
+                    current_price = None
+                    try:
+                        curve_state = await self.curve_manager.get_curve_state(
+                            token_info.bonding_curve
                         )
+                        current_price = curve_state.calculate_price()
+                    except (ValueError, Exception) as e:
+                        # If we can't get the current price, use the last known price or entry price
+                        if last_known_price is not None:
+                            current_price = last_known_price
+                            logger.warning(f"Could not fetch current price in polling mode ({e}), using last known price: {current_price:.8f} SOL")
+                        else:
+                            # Fallback to entry price if no last known price
+                            current_price = float(entry_price) if isinstance(entry_price, Decimal) else entry_price
+                            logger.warning(f"Could not fetch current price in polling mode ({e}), using entry price: {current_price:.8f} SOL")
+                        
+                        # If we can't get price, trigger stagnation sell after timeout
+                        current_time = asyncio.get_event_loop().time()
+                        time_since_last_change = current_time - last_price_change_time
+                        
+                        if time_since_last_change >= price_stagnation_timeout:
+                            if await self._try_acquire_sell_lock():
+                                try:
+                                    logger.info(f"Could not fetch price for {price_stagnation_timeout} seconds, selling token")
+                                    return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=False)
+                                finally:
+                                    self._sell_in_progress.release()
+                        
+                        # Continue to next iteration
+                        await asyncio.sleep(self.check_interval)
+                        continue
                     
-                    # Get current price
-                    curve_state = await self.curve_manager.get_curve_state(
-                        token_info.bonding_curve
-                    )
-                    current_price = curve_state.calculate_price()
+                    # Update last known price
+                    last_known_price = current_price
                     
                     # Handle Decimal arithmetic if entry_price is Decimal
                     if isinstance(entry_price, Decimal):
@@ -511,16 +520,6 @@ class TrailingTokenSeller(TokenSeller):
                 except asyncio.CancelledError:
                     logger.info("Price monitoring cancelled")
                     raise
-                except ValueError as e:
-                    if "graduated" in str(e).lower():
-                        logger.info(f"Token {token_info.symbol} has graduated to Raydium - stopping monitoring")
-                        return TradeResult(
-                            success=False,
-                            error_message="Token graduated to Raydium",
-                        )
-                    else:
-                        logger.error(f"Error monitoring price: {e!s}")
-                        await asyncio.sleep(self.check_interval)
                 except Exception as e:
                     logger.error(f"Error monitoring price: {e!s}")
                     await asyncio.sleep(self.check_interval)

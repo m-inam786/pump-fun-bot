@@ -84,17 +84,10 @@ class TokenSeller(Trader):
                 return TradeResult(success=False, error_message="No tokens to sell")
 
             # Fetch token price
-            try:
-                curve_state = await self.curve_manager.get_curve_state(
-                    token_info.bonding_curve
-                )
-                token_price_sol = curve_state.calculate_price()
-            except ValueError as e:
-                if "graduated" in str(e).lower():
-                    logger.info(f"Token {token_info.symbol} has graduated to Raydium - cannot sell on pump.fun")
-                    return TradeResult(success=False, error_message="Token graduated to Raydium")
-                else:
-                    raise
+            curve_state = await self.curve_manager.get_curve_state(
+                token_info.bonding_curve
+            )
+            token_price_sol = curve_state.calculate_price()
 
             logger.info(f"Price per Token: {token_price_sol:.8f} SOL")
 
