@@ -13,21 +13,19 @@ import os
 import sys
 from pathlib import Path
 from solders.pubkey import Pubkey
+import base58
 
 # Add the src directory to the Python path
-src_path = Path(__file__).parent / "src"
+src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
 NONCE_ACCOUNT_SIZE = 80  # Size of a nonce account in bytes
 NONCE_ACCOUNT_RENT_EXEMPTION_LAMPORTS = 1447680  # Minimum lamports for rent exemption
-PROGRAM_ID = Pubkey.from_string("11111111111111111111111111111111")
+SYSTEM_PROGRAM_ID = Pubkey.from_string("11111111111111111111111111111111")
 
 from solders.keypair import Keypair
-from solders.system_program import initialize_nonce_account, create_account
+from solders.system_program import initialize_nonce_account, create_account, InitializeNonceAccountParams, CreateAccountParams
 from core.client import SolanaClient
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 class NonceAccountSetup:
@@ -50,41 +48,78 @@ class NonceAccountSetup:
             output_file: Path to save the nonce account information
         """
         try:
+            # Start the client
+            await self.client.start()
+            
             # Generate a new keypair for the nonce account
             nonce_keypair = Keypair()
             
-            logger.info(f"Creating nonce account {nonce_keypair.pubkey()} with authority {authority_keypair.pubkey()}")
+            print(f"Creating nonce account {nonce_keypair.pubkey()} with authority {authority_keypair.pubkey()}")
             
             # Create account creation instruction
-            create_account_ix = create_account(
+            create_nonce_account_ix = create_account(
+                CreateAccountParams(
                 from_pubkey=authority_keypair.pubkey(),
                 to_pubkey=nonce_keypair.pubkey(),
                 lamports=NONCE_ACCOUNT_RENT_EXEMPTION_LAMPORTS,
                 space=NONCE_ACCOUNT_SIZE,
-                owner=PROGRAM_ID
+                owner=SYSTEM_PROGRAM_ID
+                )
             )
             
             # Create nonce initialization instruction
             init_nonce_ix = initialize_nonce_account(
-                nonce_pubkey=nonce_keypair.pubkey(),
-                authority_pubkey=authority_keypair.pubkey()
+                InitializeNonceAccountParams(
+                    nonce_pubkey=nonce_keypair.pubkey(),
+                    authority=authority_keypair.pubkey()
+                )
             )
             
             # Send the transaction to create and initialize the nonce account
-            instructions = [create_account_ix, init_nonce_ix]
+            instructions = [create_nonce_account_ix, init_nonce_ix]
             
-            tx_signature = await self.client.build_and_send_transaction(
-                instructions=instructions,
-                signer_keypair=authority_keypair,
-                additional_signers=[nonce_keypair]
-            )
+            # Create a temporary client without nonce support for this setup transaction
+            temp_client = SolanaClient(self.rpc_endpoint)
+            await temp_client.start()
+            
+            try:
+                tx_signature = await temp_client.build_and_send_transaction(
+                    instructions=instructions,
+                    signer_keypair=authority_keypair,
+                    additional_signers=[nonce_keypair]
+                )
+            except TypeError:
+                # Handle case where additional_signers parameter doesn't exist
+                # We'll need to modify the transaction manually
+                from solders.message import Message
+                from solders.transaction import Transaction
+                
+                recent_blockhash = await temp_client.get_latest_blockhash()
+                message = Message.new_with_blockhash(
+                    instructions,
+                    authority_keypair.pubkey(),
+                    recent_blockhash
+                )
+                
+                transaction = Transaction([authority_keypair, nonce_keypair], message, recent_blockhash)
+                
+                from solana.rpc.types import TxOpts
+                from solana.rpc.commitment import Processed
+                
+                client_instance = await temp_client.get_client()
+                tx_opts = TxOpts(skip_preflight=True, preflight_commitment=Processed)
+                response = await client_instance.send_transaction(transaction, tx_opts)
+                tx_signature = response.value
+            
+            finally:
+                await temp_client.close()
             
             # Wait for confirmation
             confirmed = await self.client.confirm_transaction(tx_signature)
             if not confirmed:
                 raise Exception("Nonce account creation transaction failed to confirm")
             
-            logger.info(f"Successfully created nonce account. Transaction: {tx_signature}")
+            print(f"Successfully created nonce account. Transaction: {tx_signature}")
             
             # Save the keypair information to file
             await self._save_nonce_account_info(nonce_keypair, authority_keypair, output_file)
@@ -92,11 +127,11 @@ class NonceAccountSetup:
             # Verify the account was created correctly
             await self._verify_nonce_account(nonce_keypair)
             
-            logger.info(f"Nonce account setup completed successfully!")
-            logger.info(f"Account details saved to: {output_file}")
+            print(f"Nonce account setup completed successfully!")
+            print(f"Account details saved to: {output_file}")
             
         except Exception as e:
-            logger.error(f"Failed to create nonce account: {e}")
+            print(f"Failed to create nonce account: {e}")
             raise
         finally:
             await self.client.close()
@@ -133,7 +168,7 @@ class NonceAccountSetup:
         with open(output_file, 'w') as f:
             json.dump(account_info, f, indent=2)
         
-        logger.info(f"Nonce account information saved to {output_file}")
+        print(f"Nonce account information saved to {output_file}")
     
     async def _verify_nonce_account(self, nonce_keypair: Keypair) -> None:
         """Verify that the nonce account was created correctly.
@@ -150,14 +185,39 @@ class NonceAccountSetup:
             if account_info.lamports < NONCE_ACCOUNT_RENT_EXEMPTION_LAMPORTS:
                 logger.warning(f"Nonce account has insufficient lamports for rent exemption: {account_info.lamports}")
             
-            logger.info(f"Nonce account verification successful:")
-            logger.info(f"  Address: {nonce_keypair.pubkey()}")
-            logger.info(f"  Lamports: {account_info.lamports}")
-            logger.info(f"  Owner: {account_info.owner}")
+            print(f"Nonce account verification successful:")
+            print(f"  Address: {nonce_keypair.pubkey()}")
+            print(f"  Lamports: {account_info.lamports}")
+            print(f"  Owner: {account_info.owner}")
             
         except Exception as e:
-            logger.error(f"Nonce account verification failed: {e}")
+            print(f"Nonce account verification failed: {e}")
             raise
+
+
+def load_keypair_from_private_key(private_key: str) -> Keypair:
+    """Load a keypair from a private key string.
+    
+    Args:
+        private_key: Private key as base58 string or base64 string
+        
+    Returns:
+        Loaded Keypair object
+    """
+    try:
+        # Try base58 decoding first (most common format)
+        try:
+            private_key_bytes = base58.b58decode(private_key)
+        except:
+            # If base58 fails, try base64
+            private_key_bytes = base64.b64decode(private_key)
+        
+        if len(private_key_bytes) != 64:
+            raise ValueError(f"Invalid private key length: {len(private_key_bytes)}. Expected 64 bytes.")
+        
+        return Keypair.from_bytes(private_key_bytes)
+    except Exception as e:
+        raise ValueError(f"Invalid private key format: {e}")
 
 
 def load_keypair_from_file(keypair_file: str) -> Keypair:
@@ -197,7 +257,12 @@ async def main():
     
     parser = argparse.ArgumentParser(description="Setup durable nonce account for pump.fun bot")
     parser.add_argument("--rpc-endpoint", required=True, help="Solana RPC endpoint URL")
-    parser.add_argument("--wallet-file", required=True, help="Path to wallet keypair file")
+    
+    # Make wallet options mutually exclusive
+    wallet_group = parser.add_mutually_exclusive_group(required=True)
+    wallet_group.add_argument("--private-key", help="Private key as base58 or base64 string")
+    wallet_group.add_argument("--wallet-file", help="Path to wallet keypair file")
+    
     parser.add_argument("--output-file", default="data/nonce_account.json", help="Output file for nonce account info")
     parser.add_argument("--verify-only", action="store_true", help="Only verify existing nonce account")
     
@@ -205,9 +270,14 @@ async def main():
     
     try:
         # Load the wallet keypair (authority)
-        logger.info(f"Loading wallet keypair from {args.wallet_file}")
-        authority_keypair = load_keypair_from_file(args.wallet_file)
-        logger.info(f"Loaded wallet: {authority_keypair.pubkey()}")
+        if args.private_key:
+            print("Loading wallet keypair from private key...")
+            authority_keypair = load_keypair_from_private_key(args.private_key)
+        else:
+            print(f"Loading wallet keypair from {args.wallet_file}")
+            authority_keypair = load_keypair_from_file(args.wallet_file)
+        
+        print(f"Loaded wallet: {authority_keypair.pubkey()}")
         
         # Initialize setup utility
         setup = NonceAccountSetup(args.rpc_endpoint)
@@ -215,24 +285,25 @@ async def main():
         if args.verify_only:
             # Just verify existing nonce account
             if not os.path.exists(args.output_file):
-                logger.error(f"Nonce account file not found: {args.output_file}")
+                print(f"Nonce account file not found: {args.output_file}")
                 return
             
             with open(args.output_file, 'r') as f:
                 nonce_info = json.load(f)
             
             nonce_keypair = Keypair.from_bytes(base64.b64decode(nonce_info['nonce_account']['secret_key']))
+            await setup.client.start()
             await setup._verify_nonce_account(nonce_keypair)
             await setup.client.close()
         else:
             # Create new nonce account
-            logger.info("Creating new nonce account...")
+            print("Creating new nonce account...")
             await setup.create_nonce_account(authority_keypair, args.output_file)
             
-        logger.info("Setup completed successfully!")
+        print("Setup completed successfully!")
         
     except Exception as e:
-        logger.error(f"Setup failed: {e}")
+        print(f"Setup failed: {e}")
         sys.exit(1)
 
 

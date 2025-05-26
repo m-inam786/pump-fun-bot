@@ -130,6 +130,8 @@ class PumpTrader:
         tip_account: str | None = None,
         tip_rpc_url: str | None = None,
 
+        # Nonce account settings
+        nonce_account_file: str | None = None,
     ):
         """Initialize the pump trader.
         Args:
@@ -193,6 +195,8 @@ class PumpTrader:
             tip_lamports: Default tip amount in lamports
             tip_account: Tip account public key
             tip_rpc_url: Tip RPC URL
+
+            nonce_account_file: Path to nonce account file
         """
 
         # Initialize custom tip based on configuration
@@ -201,11 +205,11 @@ class PumpTrader:
             self.tip_rpc_url = tip_rpc_url
             self.tip_lamports = tip_lamports
             self.tip_account = Pubkey.from_string(tip_account)
-            self.solana_client = SolanaClient(rpc_endpoint, tip_rpc_url=tip_rpc_url)
+            self.solana_client = SolanaClient(rpc_endpoint, tip_rpc_url=tip_rpc_url, nonce_file_path=nonce_account_file)
         else:
             logger.info("Custom tip disabled. Using regular Solana client.")
             self.tip_account = None
-            self.solana_client = SolanaClient(rpc_endpoint)
+            self.solana_client = SolanaClient(rpc_endpoint, nonce_file_path=nonce_account_file)
 
         self.wallet = Wallet(private_key)
         self.curve_manager = BondingCurveManager(self.solana_client)

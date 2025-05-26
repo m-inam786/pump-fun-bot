@@ -4,7 +4,7 @@ Solana client abstraction for blockchain operations.
 
 import asyncio
 import json
-from typing import Any, Union
+from typing import Any, Union, Optional
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
@@ -17,6 +17,7 @@ from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 from utils.logger import get_logger
+from core.nonce_manager import NonceManager
 
 logger = get_logger(__name__)
 
@@ -26,12 +27,13 @@ JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront1111111111111111111111
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str, tip_rpc_url: str | None = None):
+    def __init__(self, rpc_endpoint: str, tip_rpc_url: str | None = None, nonce_file_path: str | None = None):
         """Initialize Solana client with RPC endpoint.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
             tip_rpc_url: URL of the custom tip RPC endpoint
+            nonce_file_path: Path to nonce account file for durable transactions
         """
         self.rpc_endpoint = rpc_endpoint
         self._client = None
@@ -39,12 +41,27 @@ class SolanaClient:
         self._tip_client = None
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
-        self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
+        self._blockhash_updater_task = None
+        
+        # Initialize nonce manager if nonce file is provided
+        self.nonce_manager: Optional[NonceManager] = None
+        self.nonce_file_path = nonce_file_path
+        self.use_durable_nonce = nonce_file_path is not None
 
     async def start(self):
         """Start the client and tip client."""
         self._client = await self.get_client()
         self._tip_client = await self.get_tip_client()
+        
+        # Initialize nonce manager if using durable nonces
+        if self.use_durable_nonce and self.nonce_file_path:
+            self.nonce_manager = NonceManager(self._client)
+            await self.nonce_manager.load_nonce_account(self.nonce_file_path)
+            logger.info("Durable nonce system initialized")
+        else:
+            # Start blockhash updater only if not using durable nonces
+            self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
+            logger.info("Recent blockhash system initialized")
 
     async def start_blockhash_updater(self, interval: float = 1):
         """Start background task to update recent blockhash."""
@@ -161,29 +178,60 @@ class SolanaClient:
         tx_type: str = "sell",
     ) -> str:
         """
-        Send a transaction with optional priority fee and tip.
+        Send a transaction with durable nonce or recent blockhash.
 
         Args:
             instructions: List of instructions to include in the transaction.
+            signer_keypair: Primary signer keypair
             skip_preflight: Whether to skip preflight checks.
             max_retries: Maximum number of retry attempts.
+            tx_type: Type of transaction for routing
 
         Returns:
             Transaction signature.
         """
         client = await self.get_client()
 
-        recent_blockhash = await self.get_cached_blockhash()
+        # Prepare transaction instructions and signers
+        tx_instructions = []
+        signers = [signer_keypair]
+        
+        if tx_type == "buy":
+            if self.use_durable_nonce and self.nonce_manager:
+                # Use durable nonce - add advance nonce instruction as first instruction
+                advance_nonce_ix = await self.nonce_manager.create_advance_nonce_instruction()
+                tx_instructions.append(advance_nonce_ix)
+                
+                # Add nonce authority as signer
+                nonce_authority = self.nonce_manager.get_authority_keypair()
+                if nonce_authority.pubkey() != signer_keypair.pubkey():
+                    signers.append(nonce_authority)
+                
+                # Get current nonce as blockhash
+                nonce_hash = await self.nonce_manager.get_current_nonce()
+                blockhash = nonce_hash
+                
+                logger.info(f"Using durable nonce: {nonce_hash}")
+            else:
+                # Use recent blockhash
+                blockhash = await self.get_cached_blockhash()
+                logger.info(f"Using recent blockhash: {blockhash}")
+        else:
+            blockhash = await self.get_latest_blockhash()
+            logger.info(f"Using recent blockhash for sell transaction: {blockhash}")
+
+        # Add the provided instructions
+        tx_instructions.extend(instructions)
         
         # Create message with instructions and payer
         message = Message.new_with_blockhash(
-            instructions,
+            tx_instructions,
             signer_keypair.pubkey(),  # payer
-            recent_blockhash
+            blockhash
         )
         
         # Create transaction with signers and message
-        transaction = Transaction([signer_keypair], message, recent_blockhash)
+        transaction = Transaction(signers, message, blockhash)
 
         for attempt in range(max_retries):
             try:
@@ -196,6 +244,13 @@ class SolanaClient:
                     response = await tip_client.send_transaction(transaction, tx_opts)
                 else:
                     response = await client.send_transaction(transaction, tx_opts)
+                
+                # If using durable nonce, advance it after successful transaction
+                if self.use_durable_nonce and self.nonce_manager:
+                    # Note: We advance the nonce optimistically here
+                    # In production, you might want to wait for confirmation first
+                    await self.nonce_manager.advance_nonce_and_update()
+                
                 return response.value
 
             except Exception as e:

@@ -7,6 +7,7 @@ from core.client import SolanaClient
 from core.priority_fee.manager import PriorityFeeManager
 from core.pubkeys import SystemAddresses
 from core.wallet import Wallet
+from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -90,6 +91,9 @@ class AccountCleanupManager:
                 )
             )
             instructions.append(close_ix)
+
+            if priority_fee:
+                instructions = [set_compute_unit_limit(72_000), set_compute_unit_price(priority_fee)] + instructions
 
             # Send both burn and close instructions in the same transaction
             if instructions:

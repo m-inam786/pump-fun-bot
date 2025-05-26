@@ -117,6 +117,9 @@ async def start_bot(config_path: str):
         tip_lamports=cfg.get("custom_tip", {}).get("tip_lamports", 2000000),
         tip_account=cfg.get("custom_tip", {}).get("tip_account"),
         tip_rpc_url=cfg.get("custom_tip", {}).get("tip_rpc_url"),
+
+        # Nonce account settings
+        nonce_account_file=cfg.get("nonce_account", {}).get("file"),
     )
     
     await trader.start()

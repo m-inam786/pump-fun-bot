@@ -68,6 +68,9 @@ custom_tip:
   tip_account: "${TIP_ACCOUNT}" # Replace with tip account public key
   tip_rpc_url: "${TIP_RPC_URL}" # Replace with tip RPC URL
 
+nonce_account:
+  file: "data/nonce_account.json"
+
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)

@@ -1,0 +1,15 @@
+{
+  "nonce_account": {
+    "pubkey": "DjB1mM2v7Bco1wUbMtWZK2PfTSJ45tNkSs6JWWmgVqcR",
+    "secret_key": "26MF4MVYBWDuBQLKjqfJO6gMu0U9vLlFRLdvYMzC2fG9GfWDkD2ewq8lQe+5Jde9kMwq1YrdL6lSL+qYq6qo1g=="
+  },
+  "authority": {
+    "pubkey": "7SB3UFTvtK53T4H7Uaj68U87mSDNub9J8akSj1wPHco7",
+    "secret_key": "2sPiPYGUba/DwqbT9tE9wDBZFOGzpgN+wRMwRIJXCJlfmP85anj/LK7yDHcJTxoLgwA4ZQe1DqonHmPrUAaj/g=="
+  },
+  "creation_info": {
+    "rpc_endpoint": "https://staked.helius-rpc.com/?api-key=b0bdf021-9b84-4c3a-b53b-9072e2ee79e0",
+    "rent_exemption_lamports": 1447680,
+    "account_size": 80
+  }
+}
