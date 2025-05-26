@@ -176,8 +176,20 @@ class ShrederSocketListener(BaseTokenListener):
                 if len(instruction_data) >= 8 and list(instruction_data[:8]) == create_discriminator:
                     logger.info("Found create instruction in Shreder transaction data")
                     
+                    # Get the instruction accounts using account indices
+                    instruction_accounts = []
+                    if 'accounts' in instruction:
+                        account_indices_buffer = instruction['accounts']
+                        account_indices = self._convert_buffer_to_bytes(account_indices_buffer)
+                        
+                        # Each account index is 1 byte
+                        for i in range(len(account_indices)):
+                            account_index = account_indices[i]
+                            if account_index < len(account_keys):
+                                instruction_accounts.append(account_keys[account_index])
+                    
                     # Parse the create instruction data
-                    token_info = await self._parse_create_instruction_data(instruction_data, account_keys)
+                    token_info = await self._parse_create_instruction_data(instruction_data, instruction_accounts)
                     if token_info:
                         return token_info
                         
@@ -198,12 +210,12 @@ class ShrederSocketListener(BaseTokenListener):
             logger.info(f"Data structure: {json.dumps(data, indent=2)[:1000]}...")
             return None
 
-    async def _parse_create_instruction_data(self, instruction_data: bytes, account_keys: list) -> TokenInfo | None:
+    async def _parse_create_instruction_data(self, instruction_data: bytes, instruction_accounts: list) -> TokenInfo | None:
         """Parse create instruction data to extract token information.
         
         Args:
             instruction_data: The instruction data as bytes
-            account_keys: List of account keys as bytes
+            instruction_accounts: List of instruction account keys as bytes (in order)
             
         Returns:
             TokenInfo if parsing successful, None otherwise
@@ -248,39 +260,34 @@ class ShrederSocketListener(BaseTokenListener):
             uri = instruction_data[offset:offset+uri_length].decode('utf-8')
             offset += uri_length
             
-            # Parse creator (32 bytes)
+            # Parse creator (32 bytes) - this is embedded in the instruction data
             if offset + 32 > len(instruction_data):
                 return None
             creator_bytes = instruction_data[offset:offset+32]
             creator = Pubkey(creator_bytes)
             
-            # Extract account addresses from the transaction message
-            if len(account_keys) == 0:
-                logger.error("No accounts found in transaction")
+            # Extract account addresses from the instruction accounts
+            # Based on the IDL, the create instruction accounts are:
+            # 0: mint (writable, signer)
+            # 1: mint_authority (PDA)
+            # 2: bonding_curve (writable, PDA)
+            # 3: associated_bonding_curve (writable, PDA)
+            # 4: metadata (writable, PDA)
+            # 5: user (writable, signer)
+            # 6: system_program
+            # 7: token_program
+            # 8: associated_token_program
+            # 9: rent
+            
+            if len(instruction_accounts) < 6:
+                logger.error(f"Not enough accounts in create instruction: {len(instruction_accounts)}")
                 return None
                 
-            # The mint is typically the first account in create transactions
-            mint = Pubkey(account_keys[0])
-            
-            # Find the user (signer) - use the creator as the user since they're often the same
-            user = creator
-            
-            # Derive the bonding curve PDA
-            bonding_curve, _ = Pubkey.find_program_address(
-                [b"bonding-curve", bytes(mint)],
-                Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")  # Pump program
-            )
-            
-            # Derive associated bonding curve (ATA)
-            from core.pubkeys import SystemAddresses
-            associated_bonding_curve, _ = Pubkey.find_program_address(
-                [
-                    bytes(bonding_curve),
-                    bytes(SystemAddresses.TOKEN_PROGRAM),
-                    bytes(mint),
-                ],
-                SystemAddresses.ASSOCIATED_TOKEN_PROGRAM,
-            )
+            # Extract the key accounts
+            mint = Pubkey(instruction_accounts[0])
+            bonding_curve = Pubkey(instruction_accounts[2])
+            associated_bonding_curve = Pubkey(instruction_accounts[3])
+            user = Pubkey(instruction_accounts[5])  # The user/signer account
             
             # Derive creator vault
             creator_vault, _ = Pubkey.find_program_address(
