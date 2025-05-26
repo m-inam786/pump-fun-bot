@@ -81,36 +81,109 @@ async def subscribe_transactions():
             print("🔄 Waiting for messages...")
             
             message_count = 0
-            async for message in response_stream:
+            
+            # Add a timeout wrapper to detect if no messages are coming
+            try:
+                # Wait for the first message with a timeout
+                first_message = await asyncio.wait_for(
+                    response_stream.__anext__(), 
+                    timeout=30.0
+                )
+                
+                message_count += 1
+                print(f"📨 Received first message #{message_count}")
+                
+                # Process the first message
                 try:
-                    message_count += 1
-                    print(f"📨 Received message #{message_count}")
-                    
-                    # Extract transaction data
-                    if message.transaction and message.transaction.transaction:
-                        transaction = message.transaction.transaction
+                    if first_message.transaction and first_message.transaction.transaction:
+                        transaction = first_message.transaction.transaction
                         
-                        # Get the first signature and encode it with base58
                         if transaction.signatures:
                             signature_bytes = transaction.signatures[0]
                             signature_b58 = base58.b58encode(signature_bytes).decode('utf-8')
-                            
-                            print(f"Filters: {list(message.filters)}, Sig: {signature_b58}")
+                            print(f"Filters: {list(first_message.filters)}, Sig: {signature_b58}")
                         else:
-                            print(f"Filters: {list(message.filters)}, Sig: No signatures")
+                            print(f"Filters: {list(first_message.filters)}, Sig: No signatures")
                     else:
-                        print(f"Filters: {list(message.filters)}, Sig: No transaction data")
-                        
+                        print(f"Filters: {list(first_message.filters)}, Sig: No transaction data")
                 except Exception as e:
-                    print(f"Error processing message: {e}")
-                    continue
-                    
+                    print(f"Error processing first message: {e}")
+                
+                # Continue with the rest of the stream
+                print("🔄 Continuing to listen for more messages...")
+                async for message in response_stream:
+                    try:
+                        message_count += 1
+                        print(f"📨 Received message #{message_count}")
+                        
+                        # Extract transaction data
+                        if message.transaction and message.transaction.transaction:
+                            transaction = message.transaction.transaction
+                            
+                            # Get the first signature and encode it with base58
+                            if transaction.signatures:
+                                signature_bytes = transaction.signatures[0]
+                                signature_b58 = base58.b58encode(signature_bytes).decode('utf-8')
+                                
+                                print(f"Filters: {list(message.filters)}, Sig: {signature_b58}")
+                            else:
+                                print(f"Filters: {list(message.filters)}, Sig: No signatures")
+                        else:
+                            print(f"Filters: {list(message.filters)}, Sig: No transaction data")
+                            
+                    except Exception as e:
+                        print(f"Error processing message: {e}")
+                        continue
+                        
+            except asyncio.TimeoutError:
+                print("⏰ No messages received within 30 seconds")
+                print("   This could mean:")
+                print("   1. No transactions matching the filter are occurring")
+                print("   2. The server is not sending data")
+                print("   3. There's a network issue")
+                print("   4. The filter criteria might be too restrictive")
+                
+                # Let's try to continue listening anyway
+                print("🔄 Continuing to listen indefinitely...")
+                async for message in response_stream:
+                    try:
+                        message_count += 1
+                        print(f"📨 Received message #{message_count}")
+                        
+                        # Extract transaction data
+                        if message.transaction and message.transaction.transaction:
+                            transaction = message.transaction.transaction
+                            
+                            # Get the first signature and encode it with base58
+                            if transaction.signatures:
+                                signature_bytes = transaction.signatures[0]
+                                signature_b58 = base58.b58encode(signature_bytes).decode('utf-8')
+                                
+                                print(f"Filters: {list(message.filters)}, Sig: {signature_b58}")
+                            else:
+                                print(f"Filters: {list(message.filters)}, Sig: No signatures")
+                        else:
+                            print(f"Filters: {list(message.filters)}, Sig: No transaction data")
+                            
+                    except Exception as e:
+                        print(f"Error processing message: {e}")
+                        continue
+                        
+            except StopAsyncIteration:
+                print("🔚 Stream ended normally")
+            except Exception as e:
+                print(f"❌ Error in stream iteration: {e}")
+                import traceback
+                traceback.print_exc()
+                
         except grpc.aio.AioRpcError as e:
             print(f"❌ gRPC stream error: {e}")
             print(f"   Status code: {e.code()}")
             print(f"   Details: {e.details()}")
         except Exception as e:
             print(f"❌ Unexpected stream error: {e}")
+            import traceback
+            traceback.print_exc()
                 
     except grpc.aio.AioRpcError as e:
         print(f"❌ gRPC error: {e}")
