@@ -8,7 +8,6 @@ import json
 import os
 from datetime import datetime
 from time import monotonic
-from typing import Optional
 from decimal import Decimal
 import uvloop
 from solders.pubkey import Pubkey
@@ -35,7 +34,6 @@ from trading.seller import TokenSeller
 from trading.trailing_seller import TrailingTokenSeller
 from utils.logger import get_logger
 from core.pubkeys import TOKEN_DECIMALS
-from core.zeroslot_tips import ZeroSlotTradeTipManager
 from utils.discord_notifications import (
     DiscordNotifier,
     notify_token_buy,
@@ -44,7 +42,7 @@ from utils.discord_notifications import (
     notify_error,
 )
 from utils.sol_to_usd_converter import SolToUsdConverter
-from core.nozomi_tips import NozomiTipStreamManager
+from templates.buy_tx import BuyTxBuilder
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -59,16 +57,13 @@ class PumpTrader:
         wss_endpoint: str,
         private_key: str,
         buy_amount: float,
+        token_amount: int,
         buy_slippage: float,
         sell_slippage: float,
         listener_type: str = "logs",
         geyser_endpoint: str | None = None,
         geyser_api_token: str | None = None,
         geyser_auth_type: str = "x-token",
-        pump_portal_enabled: bool = False,
-
-        extreme_fast_mode: bool = False,
-        extreme_fast_token_amount: int = 30,
         
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
@@ -129,19 +124,12 @@ class PumpTrader:
         # SOL/USD converter settings
         sol_price_update_interval: int = 480,  # 8 minutes
 
-        # Tip manager settings (unified for both zeroslot and nozomi)
-        use_tip_manager: bool = False,
-        tip_manager: str = "zeroslot",  # "zeroslot" or "nozomi"
-        tip_lamports: int = 10000,
-        
-        # Zero slot tip stream settings
-        zeroslot_tip_account: str | None = None,
-        zeroslot_rpc_endpoint: str | None = None,
-        
-        # Nozomi tip stream settings  
-        nozomi_websocket_url: str | None = None,
-        nozomi_tip_account: str | None = None,
-        nozomi_rpc_url: str | None = None,
+        # Custom tip settings
+        use_custom_tip: bool = False,
+        tip_lamports: int = 2000000,
+        tip_account: str | None = None,
+        tip_rpc_url: str | None = None,
+
     ):
         """Initialize the pump trader.
         Args:
@@ -149,6 +137,7 @@ class PumpTrader:
             wss_endpoint: WebSocket endpoint URL
             private_key: Wallet private key
             buy_amount: Amount of SOL to spend on buys
+            token_amount: Amount of tokens to buy
             buy_slippage: Slippage tolerance for buys
             sell_slippage: Slippage tolerance for sells
 
@@ -156,10 +145,6 @@ class PumpTrader:
             geyser_endpoint: Geyser endpoint URL (required for geyser listener)
             geyser_api_token: Geyser API token (required for geyser listener)
             geyser_auth_type: Geyser authentication type ('x-token' or 'basic')
-            pump_portal_enabled: Whether to enable the PumpPortal listener in addition to the main listener
-
-            extreme_fast_mode: Whether to enable extreme fast mode
-            extreme_fast_token_amount: Maximum token amount for extreme fast mode
 
             enable_dynamic_priority_fee: Whether to enable dynamic priority fees
             enable_fixed_priority_fee: Whether to enable fixed priority fees
@@ -204,53 +189,22 @@ class PumpTrader:
             
             sol_price_update_interval: Time between SOL price updates in seconds
 
-            use_tip_manager: Whether to enable tip manager for faster transactions
-            tip_manager: Type of tip manager to use ("zeroslot" or "nozomi")
+            use_custom_tip: Whether to enable custom tip manager for faster transactions
             tip_lamports: Default tip amount in lamports
-            
-            zeroslot_tip_account: Zero slot tip account public key
-            zeroslot_rpc_endpoint: Zero slot RPC URL
-            
-            nozomi_websocket_url: Nozomi WebSocket URL
-            nozomi_tip_account: Nozomi tip account public key
-            nozomi_rpc_url: Nozomi RPC URL
+            tip_account: Tip account public key
+            tip_rpc_url: Tip RPC URL
         """
 
-        # Initialize tip manager based on configuration
-        self.tip_manager_instance = None
-        self.tip_lamports = tip_lamports
-        self.tip_manager_type = tip_manager.lower() if tip_manager else "none"
-        
-        if use_tip_manager:
-            if self.tip_manager_type == "zeroslot":
-                if zeroslot_tip_account and zeroslot_rpc_endpoint:
-                    self.tip_manager_instance = ZeroSlotTradeTipManager(
-                        tip_account_str=zeroslot_tip_account,
-                        rpc_endpoint=zeroslot_rpc_endpoint,
-                    )
-                    logger.info("Zero slot Tip Manager enabled. Using Solana client with zeroslot tip manager.")
-                    self.solana_client = SolanaClient(rpc_endpoint, tip_manager=self.tip_manager_instance)
-                else:
-                    logger.warning("Zero slot tips enabled but tip account or RPC endpoint is missing. Manager not started. Using regular Solana client.")
-                    self.solana_client = SolanaClient(rpc_endpoint)
-            elif self.tip_manager_type == "nozomi":
-                if nozomi_websocket_url and nozomi_tip_account and nozomi_rpc_url:
-                    self.tip_manager_instance = NozomiTipStreamManager(
-                        websocket_url=nozomi_websocket_url,
-                        tip_account_str=nozomi_tip_account,
-                        tip_hardcap_sol=tip_lamports / 1_000_000_000,  # Convert lamports to SOL
-                        rpc_endpoint=nozomi_rpc_url,
-                    )
-                    logger.info("Nozomi Tip Manager enabled. Using Solana client with nozomi tip manager.")
-                    self.solana_client = SolanaClient(rpc_endpoint, tip_manager=self.tip_manager_instance)
-                else:
-                    logger.warning("Nozomi tips enabled but WebSocket URL, tip account, or RPC URL is missing. Manager not started. Using regular Solana client.")
-                    self.solana_client = SolanaClient(rpc_endpoint)
-            else:
-                logger.warning(f"Unknown tip manager type: {tip_manager}. Using regular Solana client.")
-                self.solana_client = SolanaClient(rpc_endpoint)
+        # Initialize custom tip based on configuration
+        if use_custom_tip:
+            logger.info("Custom tip enabled. Solana client will use custom tip RPC URL.")
+            self.tip_rpc_url = tip_rpc_url
+            self.tip_lamports = tip_lamports
+            self.tip_account = Pubkey.from_string(tip_account)
+            self.solana_client = SolanaClient(rpc_endpoint, tip_rpc_url=tip_rpc_url)
         else:
-            logger.info("Tip manager disabled. Using regular Solana client.")
+            logger.info("Custom tip disabled. Using regular Solana client.")
+            self.tip_account = None
             self.solana_client = SolanaClient(rpc_endpoint)
 
         self.wallet = Wallet(private_key)
@@ -273,9 +227,22 @@ class PumpTrader:
             self.solana_client,
             self.wallet,
             self.curve_manager,
-            max_retries,
-            extreme_fast_mode
+            max_retries
         )
+        
+        # Initialize bot configuration for static templates
+        # Set bot config for static templates (regular mode)
+        BuyTxBuilder.update_buy_tx_with_bot_config(
+            buy_amount=buy_amount,
+            buy_slippage=buy_slippage,
+            priority_fee_microlamports=fixed_priority_fee,
+            wallet_instance=self.wallet,
+            tip_amount_lamports=tip_lamports if use_custom_tip else None,
+            tip_destination=self.tip_account if use_custom_tip else None,
+            token_amount=token_amount
+        )
+        logger.info(f"Initialized static buy template with: buy_amount={buy_amount}, slippage={buy_slippage}, priority_fee={fixed_priority_fee}")
+        
         # Initialize seller based on configuration
         if use_trailing_profit_loss:
             self.seller = TrailingTokenSeller(
@@ -339,6 +306,7 @@ class PumpTrader:
                 max_age_days=developer_age_days,
                 persisted_whitelist_filepath=sniped_devs_file,
                 discord_notifier=self.discord_notifier,
+                tip_destination=self.tip_account if self.tip_account else None,
             )
             logger.info("Developer manager enabled")
             logger.info(f"  Max developers: {max_developers}")
@@ -383,11 +351,10 @@ class PumpTrader:
             
         # Trading parameters
         self.buy_amount = buy_amount
+        self.token_amount = token_amount
         self.buy_slippage = buy_slippage
         self.sell_slippage = sell_slippage
         self.max_retries = max_retries
-        self.extreme_fast_mode = extreme_fast_mode
-        self.extreme_fast_token_amount = extreme_fast_token_amount
         
         # Timing parameters
         self.wait_time_after_creation = wait_time_after_creation
@@ -437,10 +404,9 @@ class PumpTrader:
         
         # Start the SOL to USD converter
         await self.sol_to_usd_converter.start()
-        
-        # Start Zero slot Tip Manager if enabled
-        if self.tip_manager_instance:
-            await self.tip_manager_instance.start()
+
+        # Start the Solana client
+        await self.solana_client.start()
 
         # Start the Discord notifier if enabled
         if self.discord_notifier:
@@ -556,12 +522,11 @@ class PumpTrader:
         except Exception as e:
             logger.error(f"Error stopping SOL/USD converter: {e!s}")
 
-        # Stop Zero slot Tip Manager if enabled
-        if self.tip_manager_instance:
-            try:
-                await self.tip_manager_instance.stop()
-            except Exception as e:
-                logger.error(f"Error stopping Zero slot Tip Manager: {e!s}")
+        # Stop the Solana client
+        try:
+            await self.solana_client.close()
+        except Exception as e:
+            logger.error(f"Error stopping Solana client: {e!s}")
 
         # Stop the shared WebSocket listener
         try:
@@ -730,46 +695,29 @@ class PumpTrader:
             token_info: Token information
         """
         try:
-            # Wait for bonding curve to stabilize (unless in extreme fast mode)
-            if not self.extreme_fast_mode:
-                logger.info(
-                    f"Waiting for {self.wait_time_after_creation} seconds for the bonding curve to stabilize..."
-                )
-                await asyncio.sleep(self.wait_time_after_creation)
-
             # Set trading parameters based on source
-            if self.developer_manager is not None and token_info.trading_params:
-                # Use the parameters attached to the token (set by the listener)
-                dev_params = token_info.trading_params
-                logger.info(f"Using developer-specific parameters for {token_info.symbol}: {dev_params}")
+            if self.developer_manager is not None:
+                # Developer manager mode - use prestored template for ultra-fast execution
+                prestored_template = token_info.prestored_template
                 
-                # Use developer-specific parameters with defaults from bot config
-                buy_amount = dev_params.get("buy_amount", self.buy_amount)
-                buy_slippage = dev_params.get("buy_slippage", self.buy_slippage)
-                priority_fee = dev_params.get("priority_fee", 
-                    self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0)
-                tip_amount = dev_params.get("tip_amount", self.tip_lamports)
-                token_amount = dev_params.get("token_amount", self.extreme_fast_token_amount) if self.extreme_fast_mode else None
+                if prestored_template:
+                    logger.info(f"Using prestored template for developer {token_info.user} with params: {token_info.trading_params}")
+                    
+                    # Execute with prestored template (FASTEST mode)
+                    buy_result: TradeResult = await self.buyer.execute(
+                        token_info,
+                        use_prestored_template=True,
+                        prestored_instructions=prestored_template,
+                        token_amount=int(token_info.trading_params.get("token_amount", 0))
+                    )
+                else:
+                    logger.warning(f"No prestored template found for developer {token_info.user}, falling back to regular mode")
+                    # Fallback to non developer manager mode
+                    buy_result: TradeResult = await self.buyer.execute(token_info, token_amount=int(token_info.trading_params.get("token_amount", 0)))
             else:
-                # Use bot's default configuration
-                buy_amount = self.buy_amount
-                buy_slippage = self.buy_slippage
-                priority_fee = self.priority_fee_manager.fixed_fee if self.priority_fee_manager.enable_fixed_fee else 0
-                tip_amount = self.tip_lamports
-                token_amount = self.extreme_fast_token_amount if self.extreme_fast_mode else None
-
-            # Buy token with appropriate parameters
-            logger.info(
-                f"Buying {buy_amount:.6f} SOL worth of {token_info.symbol}..."
-            )
-            buy_result: TradeResult = await self.buyer.execute(
-                token_info,
-                token_amount=token_amount,
-                base_sol_amount=buy_amount,
-                slippage_perc=buy_slippage,
-                priority_fee_microlamports=priority_fee,
-                tip_amount_lamports=tip_amount
-            )
+                #  Non developer manager mode - use static template with bot config
+                logger.info(f"Using static template for non developer manager mode")
+                buy_result: TradeResult = await self.buyer.execute(token_info, token_amount=int(self.token_amount))
 
             if buy_result.success:
                 await self._handle_successful_buy(token_info, buy_result)

@@ -10,15 +10,12 @@ import aiohttp
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Processed
 from solana.rpc.types import TxOpts
-from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from solders.hash import Hash
-from solders.instruction import Instruction, AccountMeta
+from solders.instruction import Instruction
 from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
-from core.zeroslot_tips import ZeroSlotTradeTipManager
-from core.nozomi_tips import NozomiTipStreamManager
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,21 +26,27 @@ JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront1111111111111111111111
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str, tip_manager: Union[ZeroSlotTradeTipManager, NozomiTipStreamManager, None] = None):
+    def __init__(self, rpc_endpoint: str, tip_rpc_url: str | None = None):
         """Initialize Solana client with RPC endpoint.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
-            tip_manager: Tip manager instance (either ZeroSlotTradeTipManager or NozomiTipStreamManager)
+            tip_rpc_url: URL of the custom tip RPC endpoint
         """
         self.rpc_endpoint = rpc_endpoint
         self._client = None
-        self.tip_manager = tip_manager
+        self.tip_rpc_url = tip_rpc_url
+        self._tip_client = None
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
 
-    async def start_blockhash_updater(self, interval: float = 0.5):
+    async def start(self):
+        """Start the client and tip client."""
+        self._client = await self.get_client()
+        self._tip_client = await self.get_tip_client()
+
+    async def start_blockhash_updater(self, interval: float = 1):
         """Start background task to update recent blockhash."""
         while True:
             try:
@@ -71,6 +74,12 @@ class SolanaClient:
         if self._client is None:
             self._client = AsyncClient(self.rpc_endpoint)
         return self._client
+    
+    async def get_tip_client(self) -> AsyncClient:
+        """Get or create the AsyncClient instance for tip RPC URL."""
+        if self._tip_client is None:
+            self._tip_client = AsyncClient(self.tip_rpc_url)
+        return self._tip_client
 
     async def close(self):
         """Close the client connection and stop the blockhash updater."""
@@ -84,6 +93,10 @@ class SolanaClient:
         if self._client:
             await self._client.close()
             self._client = None
+        
+        if self._tip_client:
+            await self._tip_client.close()
+            self._tip_client = None
 
     async def get_health(self) -> str | None:
         body = {
@@ -145,8 +158,7 @@ class SolanaClient:
         signer_keypair: Keypair,
         skip_preflight: bool = True,
         max_retries: int = 3,
-        priority_fee: int | None = None,
-        tip_amount_lamports: int | None = None
+        tx_type: str = "sell",
     ) -> str:
         """
         Send a transaction with optional priority fee and tip.
@@ -155,55 +167,22 @@ class SolanaClient:
             instructions: List of instructions to include in the transaction.
             skip_preflight: Whether to skip preflight checks.
             max_retries: Maximum number of retry attempts.
-            priority_fee: Optional priority fee in microlamports.
-            tip_amount_lamports: Optional tip amount in lamports.
 
         Returns:
             Transaction signature.
         """
         client = await self.get_client()
-        
-        logger.info(
-            f"Priority fee in microlamports: {priority_fee if priority_fee else 0}"
-        )
-
-        # Add priority fee instructions if applicable
-        if priority_fee is not None:
-            # Create compute unit limit instruction with sandwich protection if using tip manager
-            if self.tip_manager and tip_amount_lamports:
-                # Get the raw instruction data for compute unit limit
-                compute_unit_limit_ix = set_compute_unit_limit(72_000)
-                
-                # Add the jitodontfront account to the compute unit limit instruction
-                # Mark it as read-only for optimal performance
-                compute_unit_limit_ix_with_protection = Instruction(
-                    program_id=compute_unit_limit_ix.program_id,
-                    data=compute_unit_limit_ix.data,
-                    accounts=[AccountMeta(pubkey=JITO_DONT_FRONT_PUBKEY, is_signer=False, is_writable=False)]
-                )
-                
-                fee_instructions = [
-                    compute_unit_limit_ix_with_protection,
-                    set_compute_unit_price(priority_fee),
-                ]
-                
-                logger.info("Using Jito sandwich attack protection")
-            else:
-                fee_instructions = [
-                    set_compute_unit_limit(72_000),  # Default compute unit limit
-                    set_compute_unit_price(priority_fee),
-                ]
-            
-            instructions = fee_instructions + instructions
-
-        # If tip manager is provided, add tip instruction at the end
-        if self.tip_manager and tip_amount_lamports:
-            tip_instruction = await self.tip_manager.get_tip_instruction(signer_keypair.pubkey(), tip_amount_lamports)
-            if tip_instruction:
-                instructions.append(tip_instruction)
 
         recent_blockhash = await self.get_cached_blockhash()
-        message = Message(instructions, signer_keypair.pubkey())
+        
+        # Create message with instructions and payer
+        message = Message.new_with_blockhash(
+            instructions,
+            signer_keypair.pubkey(),  # payer
+            recent_blockhash
+        )
+        
+        # Create transaction with signers and message
         transaction = Transaction([signer_keypair], message, recent_blockhash)
 
         for attempt in range(max_retries):
@@ -211,9 +190,10 @@ class SolanaClient:
                 tx_opts = TxOpts(
                     skip_preflight=skip_preflight, preflight_commitment=Processed
                 )
-                # Use tip manager's RPC client if tip is provided, otherwise use default client
-                if self.tip_manager and tip_amount_lamports:
-                    response = await self.tip_manager.send_transaction(transaction, tx_opts)
+                # Use tip RPC client if tip is provided, otherwise use default client
+                if self.tip_rpc_url and tx_type == "buy":
+                    tip_client = await self.get_tip_client()
+                    response = await tip_client.send_transaction(transaction, tx_opts)
                 else:
                     response = await client.send_transaction(transaction, tx_opts)
                 return response.value

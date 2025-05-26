@@ -47,12 +47,9 @@ async def start_bot(config_path: str):
         
         # Trade parameters
         buy_amount=cfg["trade"]["buy_amount"],
+        token_amount=cfg["trade"]["token_amount"],
         buy_slippage=cfg["trade"]["buy_slippage"],
         sell_slippage=cfg["trade"]["sell_slippage"],
-        
-        # Extreme fast mode settings
-        extreme_fast_mode=cfg["trade"].get("extreme_fast_mode", False),
-        extreme_fast_token_amount=cfg["trade"].get("extreme_fast_token_amount", 30),
         
         # Listener configuration
         listener_type=cfg["filters"]["listener_type"],
@@ -115,19 +112,11 @@ async def start_bot(config_path: str):
         discord_worker_count=cfg.get("discord", {}).get("worker_count", 2),
         discord_retry_limit=cfg.get("discord", {}).get("retry_limit", 3),
 
-        # Tip manager settings
-        use_tip_manager=cfg.get("use_tip_manager", False),
-        tip_manager=cfg.get("tip_manager", "zeroslot"),
-        tip_lamports=cfg.get("tip_lamports", 2000000),
-        
-        # Zero slot tip manager settings
-        zeroslot_tip_account=cfg.get("zeroslot_tips", {}).get("tip_account"),
-        zeroslot_rpc_endpoint=cfg.get("zeroslot_tips", {}).get("rpc_url"),
-        
-        # Nozomi tip manager settings
-        nozomi_websocket_url=cfg.get("nozomi_tips", {}).get("websocket_url"),
-        nozomi_tip_account=cfg.get("nozomi_tips", {}).get("tip_account"),
-        nozomi_rpc_url=cfg.get("nozomi_tips", {}).get("rpc_url"),
+        # Custom tip settings
+        use_custom_tip=cfg.get("custom_tip", {}).get("enabled", False),
+        tip_lamports=cfg.get("custom_tip", {}).get("tip_lamports", 2000000),
+        tip_account=cfg.get("custom_tip", {}).get("tip_account"),
+        tip_rpc_url=cfg.get("custom_tip", {}).get("tip_rpc_url"),
     )
     
     await trader.start()

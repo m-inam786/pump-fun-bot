@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from solders.pubkey import Pubkey
-
+from solders.instruction import Instruction
 from core.pubkeys import PumpAddresses
 
 
@@ -26,6 +26,8 @@ class TokenInfo:
     creator_vault: Pubkey
     # Trading parameters attached directly to avoid lookup in critical path
     trading_params: dict[str, Any] = None
+    # Prestored template for ultra-fast execution
+    prestored_template: list[Instruction] | None = None
 
     def __post_init__(self):
         """Initialize default values."""

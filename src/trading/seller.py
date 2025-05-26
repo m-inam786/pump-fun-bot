@@ -17,6 +17,7 @@ from core.pubkeys import (
     PumpAddresses,
     SystemAddresses,
 )
+from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from core.wallet import Wallet
 from trading.base import TokenInfo, Trader, TradeResult
 from utils.logger import get_logger
@@ -137,6 +138,7 @@ class TokenSeller(Trader):
         associated_token_account: Pubkey,
         token_amount: int,
         min_sol_output: int,
+        tx_type: str = "sell",
     ) -> str:
         """Send sell transaction.
 
@@ -194,17 +196,22 @@ class TokenSeller(Trader):
             + struct.pack("<Q", token_amount)
             + struct.pack("<Q", min_sol_output)
         )
-        sell_ix = Instruction(PumpAddresses.PROGRAM, data, accounts)
+        sell_ix = [Instruction(PumpAddresses.PROGRAM, data, accounts)]
+
+        priority_fee = await self.priority_fee_manager.calculate_priority_fee(
+            self._get_relevant_accounts(token_info)
+        )
+
+        if priority_fee:
+            logger.info(f"Sell transaction priority fee: {priority_fee} lamports")
+            sell_ix = [set_compute_unit_limit(72_000), set_compute_unit_price(priority_fee)] + sell_ix
 
         try:
             return await self.client.build_and_send_transaction(
-                [sell_ix],
+                sell_ix,
                 self.wallet.keypair,
                 skip_preflight=True,
                 max_retries=self.max_retries,
-                priority_fee=await self.priority_fee_manager.calculate_priority_fee(
-                    self._get_relevant_accounts(token_info)
-                ),
             )
         except Exception as e:
             logger.error(f"Sell transaction failed: {e!s}")

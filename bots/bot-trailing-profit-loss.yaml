@@ -19,33 +19,30 @@ geyser:
 
 # Trading parameters
 trade:
-  buy_amount: 0.01 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
+  buy_amount: 0.001 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
+  token_amount: 10000 # Amount of tokens to buy (only valid if developer manager is false)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%) (only valid if developer manager is false)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
   # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.99 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
+  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
   take_profit_percentage: 0.10 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
-  stagnation_timeout: 30 # Seconds of no price change before selling
-
-  # EXTREME FAST mode configuration
-  extreme_fast_mode: true # Disabling for trailing stop strategy as we need accurate pricing
-  extreme_fast_token_amount: 100000 # Amount of tokens to buy (unused when extreme_fast_mode is false) (only valid if developer manager is false)
+  stagnation_timeout: 10 # Seconds of no price change before selling
 
 # Priority fee configuration (only valid if developer manager is false)
 priority_fees:
   enable_dynamic: false
   enable_fixed: true
-  fixed_amount: 1000_0000 # Base fee in microlamports (approx 0.001 SOL)
+  fixed_amount: 1000_000 # Base fee in microlamports (approx 0.001 SOL)
   extra_percentage: 0.0
-  hard_cap: 1000_0000
+  hard_cap: 1000_000
 
 # Developer manager configuration
 developer_manager:
-  enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
+  enabled: false # Set to true to enable multi-developer tracking via PostgreSQL
   db_host: "${PG_HOST}" # PostgreSQL host
   db_port: "${PG_PORT}" # PostgreSQL port
   db_name: "${PG_DATABASE}" # PostgreSQL database name
@@ -65,20 +62,11 @@ discord:
   retry_limit: 3 
 
 # Tip manager configuration
-use_tip_manager: true # Set to true to enable tip manager for faster transactions
-tip_manager: "zeroslot" # Method for tip manager: "zeroslot" or "nozomi"
-tip_lamports: 2000000 # Amount of lamports to tip for faster transactions (2000000 = 0.002 SOL) (only valid if developer manager is false)
-
-# Zero slot tip manager configuration
-zeroslot_tips:
-  tip_account: "${ZERO_SLOT_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
-  rpc_url: "${ZERO_SLOT_RPC_URL}" # Replace with Nozomi's RPC URL
-  
-# Nozomi tip manager configuration
-nozomi_tips:
-  websocket_url: "${NOZOMI_WEBSOCKET_URL}" # Replace with Nozomi's WebSocket URL
-  tip_account: "${NOZOMI_TIP_ACCOUNT}" # Replace with Nozomi's tip account public key
-  rpc_url: "${NOZOMI_RPC_URL}" # Replace with Nozomi's RPC URL
+custom_tip:
+  enabled: true # Set to true to enable tip manager for faster transactions
+  tip_lamports: 1000000 # Amount of lamports to tip for faster transactions (1000000 = 0.001 SOL) (only valid if developer manager is false)
+  tip_account: "${TIP_ACCOUNT}" # Replace with tip account public key
+  tip_rpc_url: "${TIP_RPC_URL}" # Replace with tip RPC URL
 
 # Filters for token selection
 filters:

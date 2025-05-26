@@ -241,7 +241,7 @@ def print_config_summary(config: dict) -> None:
     print("Trade settings:")
     print(f"  - Buy amount: {trade.get('buy_amount', 'not configured')} SOL")
     print(f"  - Buy slippage: {trade.get('buy_slippage', 'not configured') * 100}%")
-    print(f"  - Extreme fast mode: {'enabled' if trade.get('extreme_fast_mode') else 'disabled'}")
+    print(f"  - Token amount: {trade.get('token_amount', 'not configured')}")
     
     fees = config.get('priority_fees', {})
     print("Priority fees:")

@@ -7,18 +7,17 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Any, Tuple
 
 import asyncpg
 from solders.pubkey import Pubkey
-
 from utils.logger import get_logger
 from utils.discord_notifications import (
     DiscordNotifier,
     notify_bulk_snipe_add,
     notify_snipe_expire
 )
+from templates.buy_tx import BuyTxBuilder
 
 logger = get_logger(__name__)
 
@@ -39,6 +38,7 @@ class DeveloperManager:
         max_age_days: int = 1,
         persisted_whitelist_filepath: str = "data/developer_whitelist.json",
         discord_notifier: Optional[DiscordNotifier] = None,
+        tip_destination: Pubkey | None = None,
     ):
         """Initialize the developer manager.
 
@@ -72,11 +72,14 @@ class DeveloperManager:
         self.persisted_whitelist_filepath = persisted_whitelist_filepath
         self.save_interval = 300  # Save to file every 5 minutes
         
+        # Tip destination
+        self.tip_destination = tip_destination
+        
         # Discord notifications
         self.discord_notifier = discord_notifier
 
         # Data structures for O(1) lookup
-        # New structure: address -> {timestamp: float, params: {buy_amount, slippage, etc}}
+        # New structure: address -> {timestamp: float, params: {buy_amount, slippage, etc}, prestored_tx: [Instructions]}
         self.developer_whitelist: Dict[str, Dict[str, Any]] = {}
         
         # Ensure persisted whitelist directory exists
@@ -261,7 +264,7 @@ class DeveloperManager:
                                 )
                             )
                 
-                # 3. Add/Update new developers from DB
+                # 3. Add/Update new developers from DB and create prestored templates
                 # Keep track of newly added developers
                 new_developers = []
                 for dev, dev_data in db_developers.items():
@@ -271,7 +274,9 @@ class DeveloperManager:
                         # For existing developers, update timestamp but preserve params if none in DB
                         if not dev_data["params"] and "params" in cleaned_whitelist[dev]:
                             dev_data["params"] = cleaned_whitelist[dev]["params"]
-                            
+                    
+                    # Create prestored transaction template for this developer
+                    dev_data["prestored_tx"] = self._create_prestored_template(dev_data["params"])
                     cleaned_whitelist[dev] = dev_data
 
                 # 4. Enforce max_developers limit, prioritizing newest
@@ -287,6 +292,7 @@ class DeveloperManager:
                     self.developer_whitelist = cleaned_whitelist
                 
                 logger.info(f"Refreshed developer whitelist: {len(self.developer_whitelist)} active developers. Fetched {len(db_developers)} from DB.")
+                logger.info(f"Created {len(db_developers)} prestored transaction templates for ultra-fast sniping.")
                 
                 # Send notifications for newly added developers
                 if new_developers and len(new_developers) > 0:
@@ -425,8 +431,14 @@ class DeveloperManager:
                                     # Legacy format - convert to new format
                                     converted_data[dev] = {"timestamp": value, "params": {}}
                                 elif isinstance(value, dict) and "timestamp" in value:
-                                    # Already in new format
-                                    converted_data[dev] = value
+                                    # Already in new format - exclude prestored_tx as it's not JSON serializable
+                                    dev_data = {
+                                        "timestamp": value["timestamp"],
+                                        "params": value.get("params", {})
+                                    }
+                                    # Recreate prestored template from params
+                                    dev_data["prestored_tx"] = self._create_prestored_template(dev_data["params"])
+                                    converted_data[dev] = dev_data
                                 else:
                                     logger.warning(f"Unrecognized format for developer {dev}: {value}. Skipping.")
                         else:
@@ -436,6 +448,7 @@ class DeveloperManager:
                     self.developer_whitelist = converted_data
                     
                 logger.info(f"Loaded {len(self.developer_whitelist)} developers into whitelist from {self.persisted_whitelist_filepath}")
+                logger.info(f"Recreated {len(self.developer_whitelist)} prestored transaction templates")
             else:
                 logger.info(f"Whitelist file {self.persisted_whitelist_filepath} not found. Starting with an empty whitelist.")
         except json.JSONDecodeError as e:
@@ -449,12 +462,19 @@ class DeveloperManager:
 
 
     async def _save_persisted_whitelist(self) -> None:
-        """Save the current developer whitelist to file."""
+        """Save the current developer whitelist to file (excluding prestored templates)."""
         try:
             # Get a snapshot of the current whitelist
             async with self.whitelist_lock:
                 # Create a copy to avoid issues if it's modified during dump
-                whitelist_to_save = self.developer_whitelist.copy() 
+                whitelist_to_save = {}
+                for dev, dev_data in self.developer_whitelist.items():
+                    # Only save JSON-serializable data (exclude prestored_tx)
+                    whitelist_to_save[dev] = {
+                        "timestamp": dev_data.get("timestamp", 0),
+                        "params": dev_data.get("params", {})
+                        # prestored_tx is excluded as it's not JSON serializable
+                    }
             
             # Write to file (potentially slow I/O operation)
             async with self.file_lock:
@@ -462,6 +482,7 @@ class DeveloperManager:
                     json.dump(whitelist_to_save, f, indent=4) # Added indent for readability
                     
             logger.info(f"Saved {len(whitelist_to_save)} developers from whitelist to {self.persisted_whitelist_filepath}")
+            logger.debug("Note: Prestored transaction templates are excluded from persistence and will be recreated on startup")
         except Exception as e:
             logger.error(f"Error saving persisted whitelist: {e}")
             
@@ -476,3 +497,38 @@ class DeveloperManager:
             "whitelist_count": len(self.developer_whitelist),
             "running": self.running
         } 
+
+    def _create_prestored_template(self, params: Dict[str, Any]) -> list:
+        """Create a prestored transaction template for a developer with their specific parameters.
+        
+        Args:
+            params: Developer-specific trading parameters
+            
+        Returns:
+            List of prestored instructions ready for ultra-fast filling
+        """
+        try:
+            # Use developer-specific parameters with defaults
+            buy_amount = params.get("buy_amount", 0.1)
+            buy_slippage = params.get("buy_slippage", 0.05)
+            priority_fee = params.get("priority_fee", 50000)
+            tip_amount = params.get("tip_amount", None)
+            tip_destination = self.tip_destination
+            token_amount = params.get("token_amount", 1000000)
+            
+            # Create prestored template with developer's parameters
+            prestored_template = BuyTxBuilder.get_prestored_tx_template(
+                token_amount=token_amount,
+                max_amount_lamports=int(buy_amount * 1_000_000_000 * (1 + buy_slippage)),  # SOL to lamports with slippage
+                priority_fee_microlamports=priority_fee,
+                tip_amount_lamports=tip_amount,
+                tip_destination=tip_destination
+            )
+            
+            logger.debug(f"Created prestored template with params: buy_amount={buy_amount}, slippage={buy_slippage}, priority_fee={priority_fee}")
+            return prestored_template
+            
+        except Exception as e:
+            logger.error(f"Error creating prestored template: {e}")
+            # Return empty list as fallback
+            return []
