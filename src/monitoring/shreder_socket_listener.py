@@ -134,6 +134,7 @@ class ShrederSocketListener(BaseTokenListener):
         """
         try:
             # Check if this is the expected Shreder data structure
+            data = data['data']
             if 'transaction' not in data:
                 logger.info(f"No transaction data found in Shreder data")
                 return None
