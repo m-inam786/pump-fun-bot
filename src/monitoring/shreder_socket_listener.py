@@ -56,7 +56,7 @@ class ShrederSocketListener(BaseTokenListener):
                 try:
                     # logger.info(f"Raw message received from {websocket.remote_address}: {message[:200]}...")  # Log first 200 chars
                     data = json.loads(message)
-                    logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
+                    # logger.info(f"Parsed JSON data from Node.js client: {json.dumps(data, indent=2)[:500]}...")
                     
                     # Process the Shreder data
                     await self._process_shreder_data(data['data'])
