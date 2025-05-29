@@ -35,6 +35,10 @@ class NotificationType(Enum):
     SNIPE_ADD = auto()
     SNIPE_EXPIRE = auto()
     SNIPE_DELETE = auto()
+    MANUAL_SNIPE_ADD = auto()
+    MANUAL_SNIPE_REMOVE = auto()
+    SNIPE_LIST = auto()
+    SNIPE_SEARCH = auto()
     TOKEN_BUY = auto()
     TOKEN_SELL = auto()
     PNL = auto()
@@ -130,6 +134,10 @@ class DiscordMessage:
                     NotificationType.SNIPE_ADD: 0x00FF00,      # Green
                     NotificationType.SNIPE_EXPIRE: 0xFFA500,   # Orange
                     NotificationType.SNIPE_DELETE: 0xFF0000,   # Red
+                    NotificationType.MANUAL_SNIPE_ADD: 0x32CD32,   # Lime Green
+                    NotificationType.MANUAL_SNIPE_REMOVE: 0xDC143C, # Crimson
+                    NotificationType.SNIPE_LIST: 0x4169E1,     # Royal Blue
+                    NotificationType.SNIPE_SEARCH: 0x9370DB,   # Medium Purple
                     NotificationType.TOKEN_BUY: 0x00FFFF,      # Cyan
                     NotificationType.TOKEN_SELL: 0xFF00FF,     # Magenta
                     NotificationType.PNL: 0xFFFF00,            # Yellow
@@ -409,6 +417,198 @@ async def notify_snipe_add(
     
     return await notifier.send(message)
 
+async def notify_manual_snipe_add(
+    notifier: DiscordNotifier, 
+    developer_address: str, 
+    params: Optional[Dict[str, Any]] = None,
+    added_by: Optional[str] = None
+) -> bool:
+    """
+    Send a notification when a developer is manually added through Discord bot.
+    
+    Args:
+        notifier: Discord notifier instance
+        developer_address: Developer address
+        params: Trading parameters for the developer
+        added_by: Who added the developer
+        
+    Returns:
+        True if notification was queued successfully
+    """
+    fields: List[EmbedField] = [
+        {"name": "Address", "value": f"`{developer_address}`", "inline": True}
+    ]
+    
+    if added_by:
+        fields.append({"name": "Added By", "value": added_by, "inline": True})
+    
+    if params:
+        # Format parameters for display
+        config_str = ""
+        for key, value in params.items():
+            if key == "priority_fee" and value is not None:
+                formatted_value = f"{value / 1_000_000:.6f} SOL"
+            elif key == "tip_amount" and value is not None:
+                formatted_value = f"{value / 1_000_000_000:.6f} SOL"
+            elif key == "buy_amount" and value is not None:
+                formatted_value = f"{value:.2f} SOL"
+            elif key == "buy_slippage" and value is not None:
+                formatted_value = f"{value*100:.1f}%"
+            elif key == "take_profit_percentage" and value is not None:
+                formatted_value = f"{value*100:.1f}%"
+            elif key == "percent_sell_amount" and value is not None:
+                formatted_value = f"{value*100:.1f}%"
+            elif key == "token_amount" and value is not None:
+                if value >= 1_000_000_000_000:
+                    formatted_value = f"{value / 1_000_000_000_000:.2f}T"
+                elif value >= 1_000_000_000:
+                    formatted_value = f"{value / 1_000_000_000:.2f}B"
+                elif value >= 1_000_000:
+                    formatted_value = f"{value / 1_000_000:.2f}M"
+                else:
+                    formatted_value = str(value)
+            else:
+                formatted_value = str(value)
+            
+            config_str += f"• {key}: {formatted_value}\n"
+        
+        if config_str:
+            fields.append({"name": "Trading Parameters", "value": f"```{config_str.strip()}```", "inline": False})
+    
+    message = DiscordMessage(
+        notification_type=NotificationType.MANUAL_SNIPE_ADD,
+        embed_title="🤖 Manual Snipe Added",
+        embed_description=f"Manually added developer to snipe list",
+        embed_fields=fields
+    )
+    
+    return await notifier.send(message)
+
+async def notify_manual_snipe_remove(
+    notifier: DiscordNotifier, 
+    developer_address: str,
+    removed_by: Optional[str] = None,
+    success: bool = True
+) -> bool:
+    """
+    Send a notification when a developer is manually removed through Discord bot.
+    
+    Args:
+        notifier: Discord notifier instance
+        developer_address: Developer address
+        removed_by: Who removed the developer
+        success: Whether the removal was successful
+        
+    Returns:
+        True if notification was queued successfully
+    """
+    fields: List[EmbedField] = [
+        {"name": "Address", "value": f"`{developer_address}`", "inline": True}
+    ]
+    
+    if removed_by:
+        fields.append({"name": "Removed By", "value": removed_by, "inline": True})
+    
+    fields.append({"name": "Status", "value": "✅ Removed" if success else "❌ Not Found", "inline": True})
+    
+    title = "🗑️ Manual Snipe Removed" if success else "❌ Snipe Removal Failed"
+    description = f"{'Successfully removed' if success else 'Failed to remove'} developer from snipe list"
+    
+    message = DiscordMessage(
+        notification_type=NotificationType.MANUAL_SNIPE_REMOVE,
+        embed_title=title,
+        embed_description=description,
+        embed_fields=fields
+    )
+    
+    return await notifier.send(message)
+
+async def notify_snipe_list(
+    notifier: DiscordNotifier, 
+    developers: List[Dict[str, Any]],
+    total_count: int,
+    requested_by: Optional[str] = None,
+    limit: Optional[int] = None
+) -> bool:
+    """
+    Send a notification listing current developers in the whitelist.
+    
+    Args:
+        notifier: Discord notifier instance
+        developers: List of developer data
+        total_count: Total number of developers in whitelist
+        requested_by: Who requested the list
+        limit: Limit that was applied to the list
+        
+    Returns:
+        True if notification was queued successfully
+    """
+    fields: List[EmbedField] = []
+    
+    if requested_by:
+        fields.append({"name": "Requested By", "value": requested_by, "inline": True})
+    
+    fields.append({"name": "Total Developers", "value": str(total_count), "inline": True})
+    
+    if limit and len(developers) < total_count:
+        fields.append({"name": "Showing", "value": f"First {len(developers)} developers", "inline": True})
+    
+    # Add developers to fields (limit to prevent message being too long)
+    max_developers_to_show = min(20, len(developers))  # Discord field limit consideration
+    
+    for i, dev in enumerate(developers[:max_developers_to_show]):
+        address = dev["address"]
+        age_hours = dev["age_hours"]
+        params = dev.get("params", {})
+        
+        # Format age
+        if age_hours < 1:
+            age_str = f"{age_hours * 60:.0f}m"
+        elif age_hours < 24:
+            age_str = f"{age_hours:.1f}h"
+        else:
+            age_str = f"{age_hours / 24:.1f}d"
+        
+        # Create value string
+        value = f"`{address}`\nAge: {age_str}"
+        
+        # Add params if they exist (limit to most important ones)
+        if params:
+            important_params = []
+            if "buy_amount" in params:
+                important_params.append(f"Buy: {params['buy_amount']:.2f} SOL")
+            if "buy_slippage" in params:
+                important_params.append(f"Slip: {params['buy_slippage']*100:.1f}%")
+            
+            if important_params:
+                value += f"\n{' | '.join(important_params)}"
+        
+        fields.append({
+            "name": f"Developer {i+1}",
+            "value": value,
+            "inline": True
+        })
+    
+    # Add note if there are more developers than shown
+    if len(developers) > max_developers_to_show:
+        fields.append({
+            "name": "Note", 
+            "value": f"... and {len(developers) - max_developers_to_show} more developers", 
+            "inline": False
+        })
+    
+    description = f"Current developer snipe list ({len(developers)} shown)"
+    if total_count == 0:
+        description = "No developers currently in snipe list"
+    
+    message = DiscordMessage(
+        notification_type=NotificationType.SNIPE_LIST,
+        embed_title="📋 Developer Snipe List",
+        embed_description=description,
+        embed_fields=fields
+    )
+    
+    return await notifier.send(message)
 
 async def notify_snipe_expire(
     notifier: DiscordNotifier, 
@@ -564,6 +764,104 @@ async def notify_error(
     message = DiscordMessage(
         notification_type=NotificationType.ERROR,
         embed_title=f"❌ {error_title}",
+        embed_fields=fields
+    )
+    
+    return await notifier.send(message)
+
+async def notify_snipe_search(
+    notifier: DiscordNotifier, 
+    search_query: str,
+    developer_info: Optional[Dict[str, Any]] = None,
+    searched_by: Optional[str] = None
+) -> bool:
+    """
+    Send a notification with developer search results.
+    
+    Args:
+        notifier: Discord notifier instance
+        search_query: The search query that was used
+        developer_info: Developer information if found, None if not found
+        searched_by: Who performed the search
+        
+    Returns:
+        True if notification was queued successfully
+    """
+    fields: List[EmbedField] = [
+        {"name": "Search Query", "value": f"`{search_query}`", "inline": True}
+    ]
+    
+    if searched_by:
+        fields.append({"name": "Searched By", "value": searched_by, "inline": True})
+    
+    if developer_info:
+        # Developer found
+        address = developer_info["address"]
+        age_hours = developer_info["age_hours"]
+        params = developer_info.get("params", {})
+        match_type = developer_info.get("match_type", "exact")
+        
+        # Format age
+        if age_hours < 1:
+            age_str = f"{age_hours * 60:.0f}m"
+        elif age_hours < 24:
+            age_str = f"{age_hours:.1f}h"
+        else:
+            age_str = f"{age_hours / 24:.1f}d"
+        
+        fields.append({"name": "Status", "value": "✅ Found", "inline": True})
+        fields.append({"name": "Address", "value": f"`{address}`", "inline": False})
+        fields.append({"name": "Age", "value": age_str, "inline": True})
+        fields.append({"name": "Match Type", "value": match_type.title(), "inline": True})
+        
+        # Add parameters if they exist
+        if params:
+            # Format parameters for display
+            config_str = ""
+            for key, value in params.items():
+                if key == "priority_fee" and value is not None:
+                    formatted_value = f"{value / 1_000_000:.6f} SOL"
+                elif key == "tip_amount" and value is not None:
+                    formatted_value = f"{value / 1_000_000_000:.6f} SOL"
+                elif key == "buy_amount" and value is not None:
+                    formatted_value = f"{value:.2f} SOL"
+                elif key == "buy_slippage" and value is not None:
+                    formatted_value = f"{value*100:.1f}%"
+                elif key == "take_profit_percentage" and value is not None:
+                    formatted_value = f"{value*100:.1f}%"
+                elif key == "percent_sell_amount" and value is not None:
+                    formatted_value = f"{value*100:.1f}%"
+                elif key == "token_amount" and value is not None:
+                    if value >= 1_000_000_000_000:
+                        formatted_value = f"{value / 1_000_000_000_000:.2f}T"
+                    elif value >= 1_000_000_000:
+                        formatted_value = f"{value / 1_000_000_000:.2f}B"
+                    elif value >= 1_000_000:
+                        formatted_value = f"{value / 1_000_000:.2f}M"
+                    else:
+                        formatted_value = str(value)
+                else:
+                    formatted_value = str(value)
+                
+                config_str += f"• {key}: {formatted_value}\n"
+            
+            if config_str:
+                fields.append({"name": "Trading Parameters", "value": f"```{config_str.strip()}```", "inline": False})
+        
+        title = "🔍 Developer Found"
+        description = f"Developer found in snipe list"
+        
+    else:
+        # Developer not found
+        fields.append({"name": "Status", "value": "❌ Not Found", "inline": True})
+        
+        title = "🔍 Developer Not Found"
+        description = f"No developer matching '{search_query}' found in snipe list"
+    
+    message = DiscordMessage(
+        notification_type=NotificationType.SNIPE_SEARCH,
+        embed_title=title,
+        embed_description=description,
         embed_fields=fields
     )
     

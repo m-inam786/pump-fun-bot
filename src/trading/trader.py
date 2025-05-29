@@ -44,6 +44,8 @@ from utils.discord_notifications import (
 )
 from utils.sol_to_usd_converter import SolToUsdConverter
 from templates.buy_tx import BuyTxBuilder
+# Discord bot integration
+from discord_bot import run_discord_bot
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -125,6 +127,7 @@ class PumpTrader:
         discord_queue_size: int = 1000,
         discord_worker_count: int = 2,
         discord_retry_limit: int = 3,
+        discord_bot_token: str | None = None,
         
         # SOL/USD converter settings
         sol_price_update_interval: int = 480,  # 8 minutes
@@ -300,6 +303,10 @@ class PumpTrader:
             logger.info(f"  Queue size: {discord_queue_size}")
             logger.info(f"  Worker count: {discord_worker_count}")
 
+        # Discord bot settings (for managing developer whitelist via commands)
+        self.discord_bot_token = discord_bot_token
+        self.discord_bot_task = None
+
         # Initialize the developer manager if enabled
         self.developer_manager = None
         if enable_developer_manager:
@@ -435,6 +442,20 @@ class PumpTrader:
         if self.developer_manager:
             await self.developer_manager.start()
 
+        # Start Discord bot if token is provided and developer manager is enabled
+        if self.discord_bot_token and self.developer_manager:
+            logger.info("Starting Discord bot for developer management...")
+            self.discord_bot_task = asyncio.create_task(
+                run_discord_bot(
+                    self.discord_bot_token, 
+                    self.developer_manager, 
+                    self.discord_notifier
+                )
+            )
+            logger.info("Discord bot started successfully")
+        elif self.discord_bot_token and not self.developer_manager:
+            logger.warning("Discord bot token provided but developer manager is disabled. Discord bot requires developer manager to function.")
+
         # Warm up the RPC
         try:
             health_resp = await self.solana_client.get_health()
@@ -526,6 +547,17 @@ class PumpTrader:
         
         # Stop all services
         logger.info("Stopping services...")
+        
+        # Stop Discord bot if running
+        if self.discord_bot_task:
+            logger.info("Stopping Discord bot...")
+            self.discord_bot_task.cancel()
+            try:
+                await self.discord_bot_task
+            except asyncio.CancelledError:
+                logger.info("Discord bot stopped")
+            except Exception as e:
+                logger.error(f"Error stopping Discord bot: {e!s}")
         
         # Stop token listener - especially important for PumpPortal to avoid blacklisting
         try:
@@ -656,37 +688,46 @@ class PumpTrader:
                 token_info = await self.token_queue.get()
                 token_key = str(token_info.mint)
 
-                # Check if token is still "fresh" and not already processed
+                # Check if token is still "fresh" and not already processed/being processed
                 current_time = monotonic()
                 token_age = current_time - self.token_timestamps.get(
                     token_key, current_time
                 )
                 
-                is_processed = False
-                async with self.processed_tokens_lock:
-                    if token_key not in self.processed_tokens:
-                        # This should not happen as we add to processed_tokens in _queue_token
-                        # But just in case, we add it here
-                        self.processed_tokens.add(token_key)
+                # ATOMIC CHECK: Ensure this token hasn't been picked up by another processor
+                should_process = False
+                async with self.traded_mints_lock:
+                    if token_info.mint not in self.traded_mints:
+                        # Mark this token as being processed immediately to prevent other processors from taking it
+                        self.traded_mints.add(token_info.mint)
+                        should_process = True
                     else:
-                        # Check if this token was already processed by this processor
-                        if token_key in self.traded_mints:
-                            is_processed = True
+                        logger.debug(f"Processor {processor_id}: Token {token_info.symbol} already being processed by another processor")
 
-                if is_processed:
-                    logger.debug(f"Processor {processor_id}: Token {token_info.symbol} already processed by another processor")
+                if not should_process:
                     continue
                 
                 if token_age > self.max_token_age:
                     logger.info(
                         f"Processor {processor_id}: Skipping token {token_info.symbol} - too old ({token_age:.1f}s > {self.max_token_age}s)"
                     )
+                    # Remove from traded_mints since we're not actually processing it
+                    async with self.traded_mints_lock:
+                        self.traded_mints.discard(token_info.mint)
                     continue
 
                 logger.info(
                     f"Processor {processor_id}: Processing fresh token: {token_info.symbol} (age: {token_age:.1f}s)"
                 )
-                await self._handle_token(token_info)
+                
+                try:
+                    await self._handle_token(token_info)
+                except Exception as token_error:
+                    logger.error(f"Processor {processor_id}: Error handling token {token_info.symbol}: {token_error!s}")
+                    # Remove from traded_mints if processing failed so cleanup can handle it
+                    async with self.traded_mints_lock:
+                        self.traded_mints.discard(token_info.mint)
+                    raise
 
             except asyncio.CancelledError:
                 # Handle cancellation gracefully
@@ -790,8 +831,7 @@ class PumpTrader:
                 self.sol_to_usd_converter.convert_sol_to_usd(Decimal(str(buy_result.price * buy_result.amount)))
             )
         
-        async with self.traded_mints_lock:
-            self.traded_mints.add(token_info.mint)
+        # NOTE: Token is already added to traded_mints at start of processing to prevent race conditions
         
         # Sell token if not in marry mode
         if not self.marry_mode:            

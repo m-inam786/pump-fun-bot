@@ -242,7 +242,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check take profit target
                             elif price_decimal >= take_profit_target:
                                 logger.info(f"Take profit target reached at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True, percent_sell_amount=sell_percent)
                                 result_event.set()
                         else:
                             # Original float-based logic
@@ -268,7 +268,7 @@ class TrailingTokenSeller(TokenSeller):
                             # Check take profit target
                             elif price >= take_profit_target:
                                 logger.info(f"Take profit target reached at price: {price:.8f} SOL")
-                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True)
+                                sell_result = await self._execute_sell(token_info, token_balance, price, is_take_profit=True, percent_sell_amount=sell_percent)
                                 result_event.set()
                     finally:
                         # Always release the lock when done
@@ -457,7 +457,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, float(current_price), is_take_profit=True)
+                                    return await self._execute_sell(token_info, token_balance, float(current_price), is_take_profit=True, percent_sell_amount=sell_percent)
                                 finally:
                                     self._sell_in_progress.release()
                     else:
@@ -511,7 +511,7 @@ class TrailingTokenSeller(TokenSeller):
                             if await self._try_acquire_sell_lock():
                                 try:
                                     logger.info(f"Take profit target reached at price: {current_price:.8f} SOL")
-                                    return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=True)
+                                    return await self._execute_sell(token_info, token_balance, current_price, is_take_profit=True, percent_sell_amount=sell_percent)
                                 finally:
                                     self._sell_in_progress.release()
 

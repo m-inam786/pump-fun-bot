@@ -32,7 +32,7 @@ trade:
   
   # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
+  trailing_stop_percentage: 0.99 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
   take_profit_percentage: 0.10 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
@@ -66,6 +66,8 @@ discord:
   queue_size: 1000
   worker_count: 1
   retry_limit: 3 
+  # Discord bot settings for managing developer whitelist via commands
+  bot_token: "${DISCORD_BOT_TOKEN}" # Discord bot token for slash commands (optional)
 
 # Tip manager configuration
 custom_tip:
@@ -81,7 +83,7 @@ nonce_account:
 filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
-  listener_type: "shreder_socket" # Method for detecting new tokens: "pump_portal", "logs", "blocks", "geyser", or "shreder_socket"
+  listener_type: "geyser" # Method for detecting new tokens: "pump_portal", "logs", "blocks", "geyser", or "shreder_socket"
   max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
@@ -103,3 +105,7 @@ cleanup:
   mode: "after_sell" # Clean up after each sell
   force_close_with_burn: false
   with_priority_fee: false
+
+# Concurrency settings for handling multiple simultaneous snipes
+concurrency:
+  processor_count: 3 # Number of concurrent token processors (increase to handle more simultaneous tokens)

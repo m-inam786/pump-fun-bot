@@ -88,7 +88,13 @@ class BlockListener(BaseTokenListener):
                             # If using developer manager and no specific creator_address was provided,
                             # mark this developer as sniped to prevent duplicate processing
                             if self.developer_manager is not None and creator_address is None:
-                                await self.developer_manager.mark_as_sniped(str(token_info.user))
+                                async def _mark_sniped():
+                                    try:
+                                        await self.developer_manager.mark_as_sniped(str(token_info.user))
+                                    except Exception as e:
+                                        logger.error(f"Error marking developer {token_info.user} as sniped: {e}")
+                                
+                                asyncio.create_task(_mark_sniped())
 
                             await token_callback(token_info)
 

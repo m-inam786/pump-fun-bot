@@ -115,6 +115,7 @@ async def start_bot(config_path: str):
         discord_queue_size=cfg.get("discord", {}).get("queue_size", 1000),
         discord_worker_count=cfg.get("discord", {}).get("worker_count", 2),
         discord_retry_limit=cfg.get("discord", {}).get("retry_limit", 3),
+        discord_bot_token=cfg.get("discord", {}).get("bot_token"),
 
         # Custom tip settings
         use_custom_tip=cfg.get("custom_tip", {}).get("enabled", False),
@@ -124,6 +125,9 @@ async def start_bot(config_path: str):
 
         # Nonce account settings
         nonce_account_file=cfg.get("nonce_account", {}).get("file"),
+        
+        # Concurrency settings
+        processor_count=cfg.get("concurrency", {}).get("processor_count", 1),
     )
     
     await trader.start()

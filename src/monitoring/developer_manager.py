@@ -374,6 +374,155 @@ class DeveloperManager:
             else:
                 logger.info(f"Developer {developer_address} was not in whitelist to mark as sniped.")
 
+    async def add_developer(self, developer_address: str | Pubkey, params: Optional[Dict[str, Any]] = None) -> bool:
+        """Manually add a developer to the whitelist (e.g., through Discord bot).
+
+        Args:
+            developer_address: Developer address to add
+            params: Optional trading parameters for the developer
+
+        Returns:
+            True if developer was added, False if already exists
+        """
+        developer_address = str(developer_address)
+        now = time.time()
+        
+        async with self.whitelist_lock:
+            if developer_address in self.developer_whitelist:
+                logger.info(f"Developer {developer_address} already exists in whitelist")
+                return False
+            
+            # Create new developer entry
+            dev_data = {
+                "timestamp": now,
+                "params": params or {}
+            }
+            
+            # Create prestored transaction template
+            dev_data["prestored_tx"] = self._create_prestored_template(dev_data["params"])
+            
+            # Add to whitelist
+            self.developer_whitelist[developer_address] = dev_data
+            
+            # Check if we exceed max_developers limit
+            if len(self.developer_whitelist) > self.max_developers:
+                # Remove oldest developer
+                oldest_dev = min(
+                    self.developer_whitelist.items(),
+                    key=lambda x: x[1].get("timestamp", 0)
+                )
+                del self.developer_whitelist[oldest_dev[0]]
+                logger.info(f"Removed oldest developer {oldest_dev[0]} due to max_developers limit")
+            
+            logger.info(f"Manually added developer {developer_address} to whitelist with params: {params}")
+            return True
+
+    async def remove_developer(self, developer_address: str | Pubkey) -> bool:
+        """Manually remove a developer from the whitelist (e.g., through Discord bot).
+
+        Args:
+            developer_address: Developer address to remove
+
+        Returns:
+            True if developer was removed, False if not found
+        """
+        developer_address = str(developer_address)
+        async with self.whitelist_lock:
+            if developer_address in self.developer_whitelist:
+                del self.developer_whitelist[developer_address]
+                logger.info(f"Manually removed developer {developer_address} from whitelist")
+                return True
+            else:
+                logger.info(f"Developer {developer_address} not found in whitelist for removal")
+                return False
+
+    async def list_developers(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get a list of all developers in the whitelist with their details.
+
+        Args:
+            limit: Optional limit on number of developers to return
+
+        Returns:
+            List of dictionaries containing developer info
+        """
+        async with self.whitelist_lock:
+            developers = []
+            
+            # Sort by timestamp (newest first)
+            sorted_devs = sorted(
+                self.developer_whitelist.items(),
+                key=lambda x: x[1].get("timestamp", 0),
+                reverse=True
+            )
+            
+            # Apply limit if specified
+            if limit:
+                sorted_devs = sorted_devs[:limit]
+            
+            for address, dev_data in sorted_devs:
+                timestamp = dev_data.get("timestamp", 0)
+                params = dev_data.get("params", {})
+                
+                developers.append({
+                    "address": address,
+                    "timestamp": timestamp,
+                    "age_hours": (time.time() - timestamp) / 3600,
+                    "params": params
+                })
+            
+            return developers
+
+    async def search_developer(self, search_query: str | Pubkey) -> Optional[Dict[str, Any]]:
+        """Search for a specific developer in the whitelist.
+
+        Args:
+            search_query: Developer address (exact match) or partial address to search for
+
+        Returns:
+            Dictionary containing developer info if found, None otherwise
+        """
+        search_query = str(search_query)
+        
+        async with self.whitelist_lock:
+            # First try exact match
+            if search_query in self.developer_whitelist:
+                dev_data = self.developer_whitelist[search_query]
+                timestamp = dev_data.get("timestamp", 0)
+                params = dev_data.get("params", {})
+                
+                return {
+                    "address": search_query,
+                    "timestamp": timestamp,
+                    "age_hours": (time.time() - timestamp) / 3600,
+                    "params": params,
+                    "match_type": "exact"
+                }
+            
+            # If no exact match, try partial match (for convenience)
+            # Only if search query is at least 8 characters to avoid too many matches
+            if len(search_query) >= 8:
+                partial_matches = []
+                for address, dev_data in self.developer_whitelist.items():
+                    if search_query.lower() in address.lower():
+                        timestamp = dev_data.get("timestamp", 0)
+                        params = dev_data.get("params", {})
+                        
+                        partial_matches.append({
+                            "address": address,
+                            "timestamp": timestamp,
+                            "age_hours": (time.time() - timestamp) / 3600,
+                            "params": params,
+                            "match_type": "partial"
+                        })
+                
+                # Return the first partial match if found
+                if partial_matches:
+                    # Sort by timestamp (newest first) and return the first one
+                    partial_matches.sort(key=lambda x: x["timestamp"], reverse=True)
+                    return partial_matches[0]
+            
+            return None
+
     async def set_developer_params(self, developer_address: str | Pubkey, params: Dict[str, Any]) -> bool:
         """Set trading parameters for a specific developer.
 
