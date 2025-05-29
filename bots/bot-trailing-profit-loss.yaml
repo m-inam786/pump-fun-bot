@@ -49,7 +49,7 @@ priority_fees:
 # Developer manager configuration
 developer_manager:
   enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
-  fetch_from_db: true # Set to false to disable database fetching and only use manually added developers via Discord bot
+  fetch_from_db: false # Set to false to disable database fetching and only use manually added developers via Discord bot
   db_host: "${PG_HOST}" # PostgreSQL host
   db_port: "${PG_PORT}" # PostgreSQL port
   db_name: "${PG_DATABASE}" # PostgreSQL database name
@@ -58,7 +58,7 @@ developer_manager:
   db_query_file: "data/developer_query/query.sql"
   refresh_interval: 1800 # Refresh interval in seconds (30 minutes)
   max_developers: 1000 # Maximum number of developers to track
-  max_age_days: 3 # Maximum age of developers in days
+  max_age_days: 7 # Maximum age of developers in days
   sniped_devs_file: "data/developer_list/sniped_developers.json" # File to store sniped developers
 
 # Discord notification settings
