@@ -447,7 +447,7 @@ async def notify_manual_snipe_add(
         config_str = ""
         for key, value in params.items():
             if key == "priority_fee" and value is not None:
-                formatted_value = f"{value / 1_000_000:.6f} SOL"
+                formatted_value = f"{value / 1_000_000_000_000:.6f} SOL"
             elif key == "tip_amount" and value is not None:
                 formatted_value = f"{value / 1_000_000_000:.6f} SOL"
             elif key == "buy_amount" and value is not None:
@@ -820,7 +820,7 @@ async def notify_snipe_search(
             config_str = ""
             for key, value in params.items():
                 if key == "priority_fee" and value is not None:
-                    formatted_value = f"{value / 1_000_000:.6f} SOL"
+                    formatted_value = f"{value / 1_000_000_000_000:.6f} SOL"
                 elif key == "tip_amount" and value is not None:
                     formatted_value = f"{value / 1_000_000_000:.6f} SOL"
                 elif key == "buy_amount" and value is not None:

@@ -128,7 +128,7 @@ class DeveloperManagementBot(commands.Bot):
             lines.append(f"• Buy Slippage: **{params['buy_slippage']*100:.1f}%**")
         
         if "priority_fee" in params:
-            priority_sol = params['priority_fee'] / 1_000_000  # Convert microlamports to SOL
+            priority_sol = params['priority_fee'] / 1_000_000_000_000  # Convert microlamports to SOL
             lines.append(f"• Priority Fee: **{priority_sol:.6f} SOL** ({params['priority_fee']:,} microlamports)")
         
         if "tip_amount" in params:
@@ -167,7 +167,7 @@ class DeveloperCommands(commands.Cog):
         address="Developer's Solana address (required)",
         buy_amount_sol="Amount of SOL to buy with (e.g., 0.1)",
         buy_slippage_percent="Buy slippage percentage (e.g., 5 for 5%)",
-        priority_fee_sol="Priority fee in SOL (e.g., 0.00005 for 50k lamports)",
+        priority_fee_sol="Priority fee in SOL (e.g., 0.0001)",
         tip_amount_sol="Tip amount in SOL (e.g., 0.001)",
         take_profit_percent="Take profit percentage (e.g., 200 for 200%)",
         sell_percent="Percentage of tokens to sell (e.g., 100 for 100%)",
@@ -228,9 +228,9 @@ class DeveloperCommands(commands.Cog):
                         ephemeral=True
                     )
                     return
-                # Convert SOL to microlamports (1 SOL = 1,000,000 microlamports)
+                # Convert SOL to microlamports (1 SOL = 1,000,000,000,000 microlamports)
                 # Note: Priority fees are stored in microlamports for set_compute_unit_price
-                trading_params["priority_fee"] = int(priority_fee_sol * 1_000_000)
+                trading_params["priority_fee"] = int(priority_fee_sol * 1_000_000_000_000)
             
             # Tip amount validation and conversion (SOL to lamports)
             if tip_amount_sol is not None:
@@ -410,7 +410,7 @@ class DeveloperCommands(commands.Cog):
                         if "buy_slippage" in params:
                             param_info.append(f"Slippage: {params['buy_slippage']*100:.1f}%")
                         if "priority_fee" in params:
-                            priority_sol = params['priority_fee'] / 1_000_000
+                            priority_sol = params['priority_fee'] / 1_000_000_000_000
                             param_info.append(f"Priority: {priority_sol:.6f} SOL")
                         if "tip_amount" in params:
                             tip_sol = params['tip_amount'] / 1_000_000_000
