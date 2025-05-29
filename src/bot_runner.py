@@ -109,6 +109,7 @@ async def start_bot(config_path: str):
         max_developers=cfg.get("developer_manager", {}).get("max_developers", 1000),
         developer_age_days=cfg.get("developer_manager", {}).get("max_age_days", 1),
         sniped_devs_file=cfg.get("developer_manager", {}).get("sniped_devs_file", "data/sniped_developers.json"),
+        fetch_developers_from_db=cfg.get("developer_manager", {}).get("fetch_from_db", True),
         
         # Discord notification settings
         discord_webhook_url=cfg.get("discord", {}).get("webhook_url"),

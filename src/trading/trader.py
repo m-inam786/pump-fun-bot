@@ -118,6 +118,7 @@ class PumpTrader:
         max_developers: int = 1000,
         developer_age_days: int = 1,
         sniped_devs_file: str = "data/sniped_developers.json",
+        fetch_developers_from_db: bool = True,  # Flag to control database fetching
         
         # Concurrency settings
         processor_count: int = 1,
@@ -192,6 +193,7 @@ class PumpTrader:
             max_developers: Maximum number of developers to store in memory
             developer_age_days: Maximum age of developers in days before removal
             sniped_devs_file: Path to file for persisting sniped developers
+            fetch_developers_from_db: Whether to fetch developers from database or only use manually added developers
             
             processor_count: Number of concurrent token processor tasks
 
@@ -326,11 +328,13 @@ class PumpTrader:
                 persisted_whitelist_filepath=sniped_devs_file,
                 discord_notifier=self.discord_notifier,
                 tip_destination=self.tip_account if self.tip_account else None,
+                fetch_from_db=fetch_developers_from_db,
             )
             logger.info("Developer manager enabled")
             logger.info(f"  Max developers: {max_developers}")
             logger.info(f"  Developer age limit: {developer_age_days} days")
             logger.info(f"  Refresh interval: {db_refresh_interval} seconds")
+            logger.info(f"  Database fetching: {'enabled' if fetch_developers_from_db else 'disabled (Discord bot only)'}")
         
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()

@@ -39,6 +39,7 @@ class DeveloperManager:
         persisted_whitelist_filepath: str = "data/developer_whitelist.json",
         discord_notifier: Optional[DiscordNotifier] = None,
         tip_destination: Pubkey | None = None,
+        fetch_from_db: bool = True,  # Flag to control database fetching
     ):
         """Initialize the developer manager.
 
@@ -54,6 +55,8 @@ class DeveloperManager:
             max_age_days: Maximum age of developers in days before removal
             persisted_whitelist_filepath: Path to file for persisting the developer whitelist
             discord_notifier: Optional Discord notifier for notifications
+            tip_destination: Tip destination pubkey for prestored templates
+            fetch_from_db: Whether to fetch developers from database (True) or only use manually added developers (False)
         """
         # Database connection parameters
         self.db_host = db_host
@@ -93,6 +96,9 @@ class DeveloperManager:
         self.refresh_task = None
         self.save_task = None
         self.running = False
+
+        # Flag to control database fetching
+        self.fetch_from_db = fetch_from_db
 
     async def start(self) -> None:
         """Start the developer manager and periodic refresh task."""
@@ -213,33 +219,40 @@ class DeveloperManager:
         try:
             now = time.time()
             
-            # 1. Fetch developers and their parameters from DB
+            # 1. Initialize developers dict - either from DB or empty for manual-only mode
             db_developers: Dict[str, Dict[str, Any]] = {}
-            async with self.db_pool.acquire() as conn:
-                rows = await conn.fetch(self.db_query)
-                for row in rows:
-                    # First column is always the developer address
-                    developer = str(row[0])
-                    
-                    # Initialize with timestamp and empty params dict
-                    dev_data = {"timestamp": now, "params": {}}
-                    
-                    # Extract additional parameters if available in the query results
-                    param_names = ["buy_amount", "buy_slippage", "priority_fee", "tip_amount", "token_amount", 
-                                  "percent_sell_amount", "take_profit_percentage"]
-                    
-                    # Check row length to determine available parameters
-                    for i, param_name in enumerate(param_names, start=1):
-                        if len(row) > i and row[i] is not None:
-                            # Store parameter in the params dictionary
-                            dev_data["params"][param_name] = row[i]
-                    
-                    # Store developer with parameters
-                    db_developers[developer] = dev_data
-                    
-                    # Log if we found parameters
-                    if dev_data["params"]:
-                        logger.info(f"Found parameters for developer {developer}: {dev_data['params']}")
+            
+            if self.fetch_from_db:
+                # Fetch developers and their parameters from DB
+                async with self.db_pool.acquire() as conn:
+                    rows = await conn.fetch(self.db_query)
+                    for row in rows:
+                        # First column is always the developer address
+                        developer = str(row[0])
+                        
+                        # Initialize with timestamp and empty params dict
+                        dev_data = {"timestamp": now, "params": {}}
+                        
+                        # Extract additional parameters if available in the query results
+                        param_names = ["buy_amount", "buy_slippage", "priority_fee", "tip_amount", "token_amount", 
+                                      "percent_sell_amount", "take_profit_percentage"]
+                        
+                        # Check row length to determine available parameters
+                        for i, param_name in enumerate(param_names, start=1):
+                            if len(row) > i and row[i] is not None:
+                                # Store parameter in the params dictionary
+                                dev_data["params"][param_name] = row[i]
+                        
+                        # Store developer with parameters
+                        db_developers[developer] = dev_data
+                        
+                        # Log if we found parameters
+                        if dev_data["params"]:
+                            logger.info(f"Found parameters for developer {developer}: {dev_data['params']}")
+                            
+                logger.info(f"Fetched {len(db_developers)} developers from database")
+            else:
+                logger.info("Database fetching disabled - using only manually added developers")
 
             async with self.whitelist_lock:
                 current_whitelist = self.developer_whitelist.copy()
@@ -291,8 +304,12 @@ class DeveloperManager:
                 else:
                     self.developer_whitelist = cleaned_whitelist
                 
-                logger.info(f"Refreshed developer whitelist: {len(self.developer_whitelist)} active developers. Fetched {len(db_developers)} from DB.")
-                logger.info(f"Created {len(db_developers)} prestored transaction templates for ultra-fast sniping.")
+                if self.fetch_from_db:
+                    logger.info(f"Refreshed developer whitelist: {len(self.developer_whitelist)} active developers. Fetched {len(db_developers)} from DB.")
+                    logger.info(f"Created {len(db_developers)} prestored transaction templates for ultra-fast sniping.")
+                else:
+                    logger.info(f"Refreshed developer whitelist: {len(self.developer_whitelist)} active developers (manual-only mode).")
+                    logger.info(f"Created {len(self.developer_whitelist)} prestored transaction templates for ultra-fast sniping.")
                 
                 # Send notifications for newly added developers
                 if new_developers and len(new_developers) > 0:
