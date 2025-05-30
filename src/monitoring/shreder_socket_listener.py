@@ -108,7 +108,7 @@ class ShrederSocketListener(BaseTokenListener):
 
                     # Mark developer as sniped if using developer manager
                     if self.developer_manager is not None:
-                        await self.developer_manager.mark_as_sniped(str(token_info.user))
+                        await self.developer_manager.mark_as_sniped(str(token_info.creator))
 
                     await self._token_callback(token_info)
                     

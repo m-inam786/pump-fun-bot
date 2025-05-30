@@ -85,7 +85,7 @@ filters:
   match_string: null # Only process tokens with this string in name/symbol (null = all tokens)
   bro_address: null # Only trade tokens created by this user address (null = all creators or developers from manager)
   listener_type: "shreder_socket" # Method for detecting new tokens: "pump_portal", "logs", "blocks", "geyser", or "shreder_socket"
-  max_token_age: 0.0005 # Maximum token age in seconds for processing (increased to give time for trailing stop)
+  max_token_age: 0.001 # Maximum token age in seconds for processing (increased to give time for trailing stop)
   marry_mode: false # Set to false to allow selling
   yolo_mode: true # Trade continuously
 
@@ -98,7 +98,7 @@ retries:
 
 # Timing settings
 timing:
-  max_token_age: 0.0005 # Maximum token age in seconds (same as in filters)
+  max_token_age: 0.001 # Maximum token age in seconds (same as in filters)
   token_wait_timeout: 60 # Increased timeout to allow the bot more time to find tokens
 
 # Token and account management
