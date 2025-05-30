@@ -33,7 +33,7 @@ trade:
   # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
   trailing_stop_percentage: 0.99 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
-  take_profit_percentage: 0.10 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
+  take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%) (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   price_check_interval: 1.0 # Price check interval in seconds (used as fallback if WebSocket fails)
   stagnation_timeout: 10 # Seconds of no price change before selling
@@ -94,7 +94,7 @@ retries:
   max_attempts: 3
   wait_after_creation: 5 # Reduced waiting time after token creation
   wait_after_buy: 15 # Only applicable if trailing stop is not used
-  wait_before_new_token: 5
+  wait_before_new_token: 2
 
 # Timing settings
 timing:
@@ -109,4 +109,4 @@ cleanup:
 
 # Concurrency settings for handling multiple simultaneous snipes
 concurrency:
-  processor_count: 3 # Number of concurrent token processors (increase to handle more simultaneous tokens)
+  processor_count: 1 # Number of concurrent token processors (increase to handle more simultaneous tokens)
