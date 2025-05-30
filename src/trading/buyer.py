@@ -160,14 +160,14 @@ class TokenBuyer(Trader):
                                     vtr = Decimal(vtr_str) / Decimal('1e6')  # Tokens have 6 decimals
                                     
                                     token_price_sol = vsr / vtr
-                                    logger.info(f"Token price from tx details: {token_price_sol:.8f} SOL")
+                                    logger.info(f"Token price from tx details: {token_price_sol} SOL")
 
                                 except ValueError as ve:
                                     logger.error(f"ValueError converting reserves to Decimal: {ve}. Data: {parsed_data}")
                         except Exception as e:
                             logger.error(f"Error calculating price from parsed data: {e}. Data: {parsed_data}")
                 
-                logger.info(f"Template-based buy transaction successful: {tx_signature} with price {token_price_sol:.8f} SOL")
+                logger.info(f"Template-based buy transaction successful: {tx_signature} with price {token_price_sol} SOL")
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,

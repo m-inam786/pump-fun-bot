@@ -91,14 +91,20 @@ class ShrederSocketListener(BaseTokenListener):
                     logger.info(f"Extracted token from Shreder data: {token_info.name} ({token_info.symbol})")
                     
                     # Check if we should process this token
-                    trading_params = await self.should_process_token(str(token_info.user))
-                    if trading_params is None:
+                    result = await self.should_process_token(str(token_info.user))
+                    if result is None:
                         return
                         
-                    # Attach parameters to token_info
+                    # Extract trading parameters and prestored template
+                    trading_params, prestored_template = result
+                    
+                    # Attach parameters and prestored template to token_info
                     token_info.trading_params = trading_params
+                    token_info.prestored_template = prestored_template
                     if trading_params:
-                        logger.info(f"Attached trading parameters to token {token_info.symbol}: {trading_params}")
+                        logger.info(f"Attached trading parameters to token {token_info.symbol}: {trading_params} (developer mode)")
+                    if prestored_template:
+                        logger.info(f"Attached prestored template to token {token_info.symbol} (developer mode)")
 
                     # Mark developer as sniped if using developer manager
                     if self.developer_manager is not None:

@@ -76,14 +76,20 @@ class LogsListener(BaseTokenListener):
 
                             # Use the base class method to check if we should process this token
                             # and get trading parameters in one step
-                            trading_params = await self.should_process_token(str(token_info.user))
-                            if trading_params is None:
+                            result = await self.should_process_token(str(token_info.user))
+                            if result is None:
                                 continue
                             
-                            # Attach parameters directly to token_info - no additional lookup needed
+                            # Extract trading parameters and prestored template
+                            trading_params, prestored_template = result
+                            
+                            # Attach parameters and prestored template directly to token_info - no additional lookup needed
                             token_info.trading_params = trading_params
+                            token_info.prestored_template = prestored_template
                             if trading_params:
-                                logger.info(f"Attached trading parameters to token {token_info.symbol}: {trading_params}")
+                                logger.info(f"Attached trading parameters to token {token_info.symbol}: {trading_params} (developer mode)")
+                            if prestored_template:
+                                logger.info(f"Attached prestored template to token {token_info.symbol} (developer mode)")
 
                             # If using developer manager and no specific creator_address was provided,
                             # mark this developer as sniped to prevent duplicate processing

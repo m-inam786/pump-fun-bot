@@ -4,7 +4,7 @@ Base class for WebSocket token listeners.
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Optional
+from typing import Optional, Tuple, Dict, Any
 
 from trading.base import TokenInfo
 from monitoring.developer_manager import DeveloperManager
@@ -41,22 +41,25 @@ class BaseTokenListener(ABC):
     async def should_process_token(
         self, 
         creator_address_to_check: str | None = None
-    ) -> dict | None:
+    ) -> Tuple[Dict[str, Any], list] | None:
         """Determine if a token should be processed based on creator address.
         
         Args:
             creator_address: Optional creator address to filter by
             
         Returns:
-            Dictionary of trading parameters if the token should be processed, None otherwise
+            Tuple of (trading_parameters, prestored_template) if the token should be processed, None otherwise
         """
         if self.developer_manager is not None and creator_address_to_check is not None:
-            # Return developer parameters directly instead of just a boolean
+            # Return developer parameters and prestored template directly instead of just parameters
             # This avoids an additional lookup in the critical path
             if creator_address_to_check in self.developer_manager.developer_whitelist:
-                return self.developer_manager.developer_whitelist[creator_address_to_check].get("params", {})
+                dev_data = self.developer_manager.developer_whitelist[creator_address_to_check]
+                trading_params = dev_data.get("params", {})
+                prestored_template = dev_data.get("prestored_tx", [])
+                return (trading_params, prestored_template)
             return None
         else:
-            # Return empty dict when no developer manager or creator is specified
+            # Return empty dict and empty list when no developer manager or creator is specified
             # This indicates the token should be processed with default parameters
-            return {}
+            return ({}, [])

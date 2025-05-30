@@ -775,9 +775,7 @@ class PumpTrader:
                         token_amount=int(token_info.trading_params.get("token_amount", 0))
                     )
                 else:
-                    logger.warning(f"No prestored template found for developer {token_info.user}, falling back to regular mode")
-                    # Fallback to non developer manager mode
-                    buy_result: TradeResult = await self.buyer.execute(token_info, token_amount=int(token_info.trading_params.get("token_amount", 0)))
+                    raise ValueError(f"No prestored template found for developer {token_info.user} when in developer manager mode")
             else:
                 #  Non developer manager mode - use static template with bot config
                 logger.info(f"Using static template for non developer manager mode")

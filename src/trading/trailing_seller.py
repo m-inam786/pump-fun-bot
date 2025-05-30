@@ -611,7 +611,18 @@ class TrailingTokenSeller(TokenSeller):
         success = await self.client.confirm_transaction(tx_signature)
 
         if success:
-            logger.info(f"Sell transaction confirmed: {tx_signature}")
+            logger.info(f"Sell transaction confirmed: {tx_signature} | Retrieving transaction details for further confirmation")
+            tx_details = await self.client.get_transaction_details(tx_signature)
+            if tx_details and tx_details.transaction.meta:
+                # Check transaction success
+                if tx_details.transaction.meta.err:
+                    error_info = tx_details.transaction.meta.err
+                    logger.error(f"Sell operation failed: Transaction {tx_signature} failed with error: {error_info}")
+                    return TradeResult(
+                        success=False,
+                        error_message=f"Sell transaction failed: {error_info}",
+                    )
+            logger.info(f"Sell transaction successful: {tx_signature}")
             # Store whether this was a partial sell due to take profit
             result = TradeResult(
                 success=True,

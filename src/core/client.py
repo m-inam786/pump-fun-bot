@@ -21,9 +21,6 @@ from core.nonce_manager import NonceManager
 
 logger = get_logger(__name__)
 
-# Jito sandwich protection public key
-JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront11111111111111111111111Wrecker")
-
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
@@ -58,10 +55,10 @@ class SolanaClient:
             self.nonce_manager = NonceManager(self._client)
             await self.nonce_manager.load_nonce_account(self.nonce_file_path)
             logger.info("Durable nonce system initialized")
-        else:
-            # Start blockhash updater only if not using durable nonces
-            self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
-            logger.info("Recent blockhash system initialized")
+
+        # Start blockhash updater
+        self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
+        logger.info("Recent blockhash system initialized")
 
     async def start_blockhash_updater(self, interval: float = 1):
         """Start background task to update recent blockhash."""
@@ -215,10 +212,10 @@ class SolanaClient:
             else:
                 # Use recent blockhash
                 blockhash = await self.get_cached_blockhash()
-                logger.info(f"Using recent blockhash: {blockhash}")
+                logger.info(f"Using recent cached blockhash: {blockhash}")
         else:
-            blockhash = await self.get_latest_blockhash()
-            logger.info(f"Using recent blockhash for sell transaction: {blockhash}")
+            blockhash = await self.get_cached_blockhash()
+            logger.info(f"Using recent cached blockhash for sell transaction: {blockhash}")
 
         # Add the provided instructions
         tx_instructions.extend(instructions)
@@ -249,6 +246,7 @@ class SolanaClient:
                 if self.use_durable_nonce and self.nonce_manager:
                     # Note: We advance the nonce optimistically here
                     # In production, you might want to wait for confirmation first
+                    logger.info(f"Advancing nonce for next buy transaction")
                     await self.nonce_manager.advance_nonce_and_update()
                 
                 return response.value

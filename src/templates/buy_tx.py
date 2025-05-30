@@ -14,14 +14,23 @@ from core.pubkeys import (
 from solders.system_program import transfer, TransferParams
 from core.wallet import Wallet
 
+# Jito sandwich protection public key
+JITO_DONT_FRONT_PUBKEY = Pubkey.from_string("jitodontfront11111111111111111111111Wrecker")
+
 EXPECTED_DISCRIMINATOR: Final[bytes] = struct.pack("<Q", 16927863322537952870)
 
 WALLET_INSTANCE = None
 
+SET_COMPUTE_UNIT_LIMIT_INSTRUCTION = set_compute_unit_limit(72_000)
+
 BUY_TX = [
 
 # 1. Set compute unit limit
-set_compute_unit_limit(72_000),
+Instruction(
+    program_id=SET_COMPUTE_UNIT_LIMIT_INSTRUCTION.program_id,
+    data=SET_COMPUTE_UNIT_LIMIT_INSTRUCTION.data,
+    accounts=[AccountMeta(pubkey=JITO_DONT_FRONT_PUBKEY, is_signer=False, is_writable=False)]
+    ),
 
 # 2. Set compute unit price (priority fee)
 set_compute_unit_price(10000),
