@@ -91,7 +91,7 @@ class ShrederSocketListener(BaseTokenListener):
                     logger.info(f"Extracted token from Shreder data: {token_info.name} ({token_info.symbol})")
                     
                     # Check if we should process this token
-                    result = await self.should_process_token(str(token_info.user))
+                    result = await self.should_process_token(str(token_info.creator))
                     if result is None:
                         return
                         
