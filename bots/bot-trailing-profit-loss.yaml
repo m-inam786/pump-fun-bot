@@ -64,7 +64,7 @@ priority_fees:
 
 # Developer manager configuration
 developer_manager:
-  enabled: true # Set to true to enable multi-developer tracking via PostgreSQL
+  enabled: false # Set to true to enable multi-developer tracking via PostgreSQL
   fetch_from_db: false # Set to false to disable database fetching and only use manually added developers via Discord bot
   db_host: "${PG_HOST}" # PostgreSQL host
   db_port: "${PG_PORT}" # PostgreSQL port
