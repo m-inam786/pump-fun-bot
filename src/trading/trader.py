@@ -11,6 +11,7 @@ from time import monotonic
 from decimal import Decimal
 import uvloop
 from solders.pubkey import Pubkey
+import random
 
 from cleanup.modes import (
     handle_cleanup_after_failure,
@@ -835,10 +836,11 @@ class PumpTrader:
 
             # Only wait for next token in yolo mode
             if self.yolo_mode:
+                random_wait = random.randint(1, self.wait_time_before_new_token)
                 logger.info(
-                    f"YOLO mode enabled. Waiting {self.wait_time_before_new_token} seconds before looking for next token..."
+                    f"YOLO mode enabled. Waiting {random_wait} seconds before looking for next token..."
                 )
-                await asyncio.sleep(self.wait_time_before_new_token)
+                await asyncio.sleep(random_wait)
 
         except Exception as e:
             logger.error(f"Error handling token {token_info.symbol}: {e!s}")
