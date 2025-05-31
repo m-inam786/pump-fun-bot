@@ -37,7 +37,7 @@ trade:
   
   # Trailing profit/loss settings 
   use_trailing_profit_loss: true # Enable trailing profit/loss selling strategy
-  trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
+  trailing_stop_percentage: 0.025 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
   take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%) - ignored if grid_levels are provided (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
   stagnation_timeout: 2 # Seconds of no profit change before selling
