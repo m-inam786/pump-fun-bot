@@ -40,16 +40,16 @@ trade:
   trailing_stop_percentage: 0.10 # Trailing stop percentage (0.10 = 10%) (only valid if developer manager is false)
   take_profit_percentage: 0.15 # Take profit percentage (0.15 = 15%) - ignored if grid_levels are provided (only valid if developer manager is false)
   percent_sell_amount: 1.0 # Percentage of tokens to sell at take profit (1.0 = 100%). Only applies at take profit; trailing stop sells 100% of tokens. (only valid if developer manager is false)
-  stagnation_timeout: 3 # Seconds of no profit change before selling
+  stagnation_timeout: 2 # Seconds of no profit change before selling
   
   # Grid selling settings (only applies when trailing profit/loss is enabled)
   # NOTE: If grid_levels are provided, take_profit_percentage is ignored and grid selling is used instead
   profit_stagnation_threshold: 0.01 # Minimum profit percentage change to reset stagnation timer (0.01 = 1%)
   # Grid levels define profit thresholds and cumulative sell percentages
   grid_levels:
-    - profit_percentage: 0.4    # 40% profit
+    - profit_percentage: 0.2    # 40% profit
       cumulative_sell_percentage: 0.40  # Sell 40% of total position
-    - profit_percentage: 0.7    # 70% profit  
+    - profit_percentage: 0.5    # 70% profit  
       cumulative_sell_percentage: 0.75  # Sell 75% of total position (35% more)
     - profit_percentage: 1.5    # 150% profit
       cumulative_sell_percentage: 1.00  # Sell 100% of total position (25% more)
