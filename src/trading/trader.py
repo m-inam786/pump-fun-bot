@@ -32,7 +32,7 @@ from monitoring.shreder_socket_listener import ShrederSocketListener
 from trading.base import TokenInfo, TradeResult
 from trading.buyer import TokenBuyer
 from trading.seller import TokenSeller
-from trading.trailing_seller import TrailingTokenSeller
+from trading.trailing_seller import TrailingTokenSeller, GridLevel
 from utils.logger import get_logger
 from core.pubkeys import TOKEN_DECIMALS
 from utils.discord_notifications import (
@@ -72,6 +72,10 @@ class PumpTrader:
         shreder_socket_host: str = "localhost",
         shreder_socket_port: int = 8765,
         
+        # Shreder socket dev buy filter configuration (only for shreder_socket listener)
+        shreder_dev_buy_min_sol: float = 0.01,
+        shreder_dev_buy_max_sol: float = 10.0,
+        
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
         enable_fixed_priority_fee: bool = True,
@@ -84,8 +88,11 @@ class PumpTrader:
         trailing_stop_percentage: float = 0.15,
         take_profit_percentage: float = 0.50,
         percent_sell_amount: float = 1.0,
-        price_check_interval: float = 1.0,
         stagnation_timeout: int = 15,
+        
+        # Grid selling settings (for trailing profit/loss)
+        profit_stagnation_threshold: float = 0.01,
+        grid_levels: list | None = None,
         
         # Retry and timeout settings
         max_retries: int = 3,
@@ -159,6 +166,9 @@ class PumpTrader:
 
             shreder_socket_host: WebSocket server host for Shreder listener
             shreder_socket_port: WebSocket server port for Shreder listener
+
+            shreder_dev_buy_min_sol: Minimum SOL amount for developer buy filter
+            shreder_dev_buy_max_sol: Maximum SOL amount for developer buy filter
 
             enable_dynamic_priority_fee: Whether to enable dynamic priority fees
             enable_fixed_priority_fee: Whether to enable fixed priority fees
@@ -262,25 +272,52 @@ class PumpTrader:
         
         # Initialize seller based on configuration
         if use_trailing_profit_loss:
+            # Convert grid_levels from dict format to GridLevel objects if provided
+            converted_grid_levels = None
+            if grid_levels:
+                converted_grid_levels = []
+                for level_config in grid_levels:
+                    converted_grid_levels.append(GridLevel(
+                        profit_percentage=level_config["profit_percentage"],
+                        cumulative_sell_percentage=level_config["cumulative_sell_percentage"]
+                    ))
+                logger.info(f"Configured {len(converted_grid_levels)} custom grid levels")
+            
+            # If grid levels are provided, take_profit_percentage should be ignored
+            effective_take_profit_percentage = None if converted_grid_levels else take_profit_percentage
+            
             self.seller = TrailingTokenSeller(
                 client=self.solana_client,
                 wallet=self.wallet,
                 curve_manager=self.curve_manager,
                 priority_fee_manager=self.priority_fee_manager,
                 shared_listener=self.shared_websocket_listener,
+                sol_to_usd_converter=self.sol_to_usd_converter,
                 slippage=sell_slippage,
                 max_retries=max_retries,
                 trailing_stop_percentage=trailing_stop_percentage,
-                take_profit_percentage=take_profit_percentage,
+                take_profit_percentage=effective_take_profit_percentage,
                 percent_sell_amount=percent_sell_amount,
-                check_interval=price_check_interval,
                 stagnation_timeout=stagnation_timeout,
-                sol_to_usd_converter=self.sol_to_usd_converter
+                profit_stagnation_threshold=profit_stagnation_threshold,
+                grid_levels=converted_grid_levels,
             )
             logger.info("Using trailing profit/loss seller with real-time WebSocket monitoring")
             logger.info(f"  Trailing stop: {trailing_stop_percentage * 100:.1f}%")
-            logger.info(f"  Take profit: {take_profit_percentage * 100:.1f}%")
-            logger.info(f"  Price stagnation timeout: {stagnation_timeout} seconds")
+            
+            if converted_grid_levels:
+                logger.info("  GRID SELLING MODE:")
+                for i, level in enumerate(converted_grid_levels):
+                    logger.info(f"    Level {i+1}: {level.profit_percentage * 100:.0f}% profit -> {level.cumulative_sell_percentage * 100:.0f}% total sold")
+            elif effective_take_profit_percentage is not None:
+                logger.info("  TAKE PROFIT MODE:")
+                logger.info(f"    Take profit: {effective_take_profit_percentage * 100:.1f}%")
+                logger.info(f"    Percent to sell at take profit: {percent_sell_amount * 100:.1f}%")
+            else:
+                logger.info("  TRAILING STOP ONLY MODE")
+            
+            logger.info(f"  Profit stagnation timeout: {stagnation_timeout} seconds")
+            logger.info(f"  Profit stagnation threshold: {profit_stagnation_threshold * 100:.1f}%")
         else:
             self.seller = TokenSeller(
                 self.solana_client,
@@ -355,7 +392,9 @@ class PumpTrader:
             self.token_listener = ShrederSocketListener(
                 socket_host=shreder_socket_host,
                 socket_port=shreder_socket_port,
-                developer_manager=self.developer_manager
+                developer_manager=self.developer_manager,
+                dev_buy_min_sol=shreder_dev_buy_min_sol,
+                dev_buy_max_sol=shreder_dev_buy_max_sol,
             )
             logger.info(f"Using Shreder Socket listener for token monitoring on {shreder_socket_host}:{shreder_socket_port}")
         elif listener_type == "logs":
@@ -731,7 +770,15 @@ class PumpTrader:
                     # Remove from traded_mints if processing failed so cleanup can handle it
                     async with self.traded_mints_lock:
                         self.traded_mints.discard(token_info.mint)
-                    raise
+                    # Send Discord notification for the error
+                    if self.discord_notifier:
+                        await notify_error(
+                            self.discord_notifier,
+                            f"Token Processing Error - Processor {processor_id}",
+                            f"Error handling token {token_info.symbol}",
+                            f"Details: {str(token_error)}"
+                        )
+                    # Continue processing instead of crashing the processor
 
             except asyncio.CancelledError:
                 # Handle cancellation gracefully

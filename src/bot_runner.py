@@ -63,6 +63,10 @@ async def start_bot(config_path: str):
         shreder_socket_host=cfg.get("shreder_socket", {}).get("host", "localhost"),
         shreder_socket_port=cfg.get("shreder_socket", {}).get("port", 8765),
         
+        # Shreder socket dev buy filter configuration (only applies to shreder_socket listener)
+        shreder_dev_buy_min_sol=cfg.get("shreder_socket", {}).get("dev_buy_filter", {}).get("min_dev_buy_sol", 0.01),
+        shreder_dev_buy_max_sol=cfg.get("shreder_socket", {}).get("dev_buy_filter", {}).get("max_dev_buy_sol", 10.0),
+        
         # Priority fee configuration
         enable_dynamic_priority_fee=cfg.get("priority_fees", {}).get("enable_dynamic", False),
         enable_fixed_priority_fee=cfg.get("priority_fees", {}).get("enable_fixed", True),
@@ -75,8 +79,11 @@ async def start_bot(config_path: str):
         trailing_stop_percentage=cfg.get("trade", {}).get("trailing_stop_percentage", 0.15),
         take_profit_percentage=cfg.get("trade", {}).get("take_profit_percentage", 0.50),
         percent_sell_amount=cfg.get("trade", {}).get("percent_sell_amount", 1.0),
-        price_check_interval=cfg.get("trade", {}).get("price_check_interval", 1.0),
         stagnation_timeout=cfg.get("trade", {}).get("stagnation_timeout", 15),
+        
+        # Grid selling settings (for trailing profit/loss)
+        profit_stagnation_threshold=cfg.get("trade", {}).get("profit_stagnation_threshold", 0.01),
+        grid_levels=cfg.get("trade", {}).get("grid_levels"),
         
         # Retry and timeout settings
         max_retries=cfg.get("retries", {}).get("max_attempts", 10),

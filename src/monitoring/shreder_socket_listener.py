@@ -2,21 +2,22 @@
 Shreder socket listener for pump.fun tokens via Node.js client.
 """
 
-import asyncio
 import json
 import websockets
 from collections.abc import Awaitable, Callable
 from typing import Optional
-from datetime import datetime
 
 from monitoring.base_listener import BaseTokenListener
 from monitoring.developer_manager import DeveloperManager
 from trading.base import TokenInfo
 from utils.logger import get_logger
 from solders.pubkey import Pubkey
-from core.pubkeys import SystemAddresses
 
 logger = get_logger(__name__)
+
+# Pump.fun instruction discriminators for fast comparison
+CREATE_DISCRIMINATOR = bytes([24, 30, 200, 40, 5, 28, 7, 119])
+BUY_DISCRIMINATOR = bytes([102, 6, 61, 18, 1, 218, 235, 234])
 
 
 class ShrederSocketListener(BaseTokenListener):
@@ -26,7 +27,9 @@ class ShrederSocketListener(BaseTokenListener):
         self, 
         socket_host: str = "localhost",
         socket_port: int = 8765,
-        developer_manager: Optional[DeveloperManager] = None
+        developer_manager: Optional[DeveloperManager] = None,
+        dev_buy_min_sol: float = 0.01,
+        dev_buy_max_sol: float = 10.0,
     ):
         """Initialize socket listener.
         
@@ -34,12 +37,20 @@ class ShrederSocketListener(BaseTokenListener):
             socket_host: WebSocket server host
             socket_port: WebSocket server port
             developer_manager: Optional manager for developer whitelist
+            dev_buy_min_sol: Minimum SOL amount for dev buy filtering
+            dev_buy_max_sol: Maximum SOL amount for dev buy filtering
         """
         super().__init__(developer_manager)
         self.socket_host = socket_host
         self.socket_port = socket_port
         self.server = None
         self.connected_clients = set()
+        
+        # Convert SOL amounts to lamports for fast comparison
+        self.min_dev_buy_lamports = int(dev_buy_min_sol * 1_000_000_000)
+        self.max_dev_buy_lamports = int(dev_buy_max_sol * 1_000_000_000)
+        
+        logger.info(f"Dev buy filter configured: {dev_buy_min_sol} - {dev_buy_max_sol} SOL ({self.min_dev_buy_lamports} - {self.max_dev_buy_lamports} lamports)")
         
     async def _handle_client(self, websocket, path=None):
         """Handle incoming WebSocket client connections."""
@@ -85,9 +96,22 @@ class ShrederSocketListener(BaseTokenListener):
         try:
             # Store the callback for processing
             if hasattr(self, '_token_callback') and self._token_callback:
-                # Extract token info from Shreder data
-                token_info = await self._extract_token_info(data)
+                # Extract token info from Shreder data with dev buy analysis
+                token_info, dev_buy_amount = await self._extract_token_info_with_dev_buy(data)
                 if token_info:
+                    # Apply dev buy filtering - only proceed if within acceptable range
+                    if dev_buy_amount is not None:
+                        if self.min_dev_buy_lamports <= dev_buy_amount <= self.max_dev_buy_lamports:
+                            dev_buy_sol = dev_buy_amount / 1_000_000_000
+                            logger.info(f"✅ DEV BUY DETECTED within range: {dev_buy_sol:.4f} SOL for token {token_info.symbol}")
+                        else:
+                            dev_buy_sol = dev_buy_amount / 1_000_000_000
+                            logger.info(f"❌ Dev buy outside range: {dev_buy_sol:.4f} SOL for token {token_info.symbol} - skipping")
+                            return
+                    else:
+                        logger.info(f"❌ No dev buy detected for token {token_info.symbol} - skipping")
+                        return
+                    
                     logger.info(f"Extracted token from Shreder data: {token_info.name} ({token_info.symbol})")
                     
                     # Check if we should process this token
@@ -129,92 +153,169 @@ class ShrederSocketListener(BaseTokenListener):
             return bytes(buffer_obj['data'])
         return buffer_obj
 
-    async def _extract_token_info(self, data) -> TokenInfo | None:
-        """Extract TokenInfo from Shreder data.
+    def _parse_buy_amount_lamports(self, instruction_data: bytes) -> int | None:
+        """Parse buy amount in lamports from buy instruction data.
+        
+        Args:
+            instruction_data: Buy instruction data as bytes
+            
+        Returns:
+            Amount in lamports if parsing successful, None otherwise
+        """
+        try:
+            # Skip 8-byte discriminator, then skip first u64 (amount)
+            # max_sol_cost is the second u64 at bytes 16-24 (little endian)
+            if len(instruction_data) >= 24:
+                # Extract 8 bytes starting at offset 16
+                amount_bytes = instruction_data[16:24]
+                # Convert from little endian bytes to int
+                return int.from_bytes(amount_bytes, 'little')
+        except Exception:
+            pass
+        return None
+
+    async def _extract_token_info_with_dev_buy(self, data) -> tuple[TokenInfo | None, int | None]:
+        """Extract TokenInfo and dev buy amount from Shreder data.
         
         Args:
             data: Raw Shreder data from Node.js client
             
         Returns:
-            TokenInfo if extraction successful, None otherwise
+            Tuple of (TokenInfo if extraction successful, dev_buy_amount_lamports if detected)
         """
         try:
             # Check if this is the expected Shreder data structure
             data = data['data']
             if 'transaction' not in data:
-                logger.info(f"No transaction data found in Shreder data")
-                return None
+                return None, None
                 
             transaction_data = data['transaction']
             if 'transaction' not in transaction_data:
-                logger.info(f"No nested transaction found in transaction data")
-                return None
+                return None, None
                 
             transaction = transaction_data['transaction']
             if 'message' not in transaction:
-                logger.info("No message found in transaction")
-                return None
+                return None, None
                 
             message = transaction['message']
-            if 'instructions' not in message:
-                logger.info("No instructions found in transaction message")
-                return None
+            instructions = message.get('instructions')
+            if not instructions:
+                return None, None
                 
-            # Convert account keys from Buffer objects to bytes
+            # Convert account keys from Buffer objects to bytes (pre-allocate for speed)
             account_keys = []
             if 'accountKeys' in message:
-                for account_key in message['accountKeys']:
-                    account_bytes = self._convert_buffer_to_bytes(account_key)
-                    account_keys.append(account_bytes)
+                account_keys_data = message['accountKeys']
+                account_keys = [self._convert_buffer_to_bytes(acc) for acc in account_keys_data]
             
-            # Look for create instruction (discriminator: [24, 30, 200, 40, 5, 28, 7, 119])
-            create_discriminator = [24, 30, 200, 40, 5, 28, 7, 119]
+            # Optimized single-pass instruction analysis
+            create_instruction = None
+            create_accounts = None
+            buy_instructions = []
+            found_create = False
             
-            for instruction in message['instructions']:
+            # Single loop with early optimization checks
+            for instruction in instructions:
                 if 'data' not in instruction:
                     continue
                     
                 # Convert instruction data from Buffer to bytes
-                instruction_data_buffer = instruction['data']
-                instruction_data = self._convert_buffer_to_bytes(instruction_data_buffer)
+                instruction_data = self._convert_buffer_to_bytes(instruction['data'])
                 
-                # Check if this is a create instruction by comparing discriminator
-                if len(instruction_data) >= 8 and list(instruction_data[:8]) == create_discriminator:
+                # Fast discriminator check with early exit
+                if len(instruction_data) < 8:
+                    continue
+                    
+                discriminator = instruction_data[:8]
+                
+                # Check for create instruction first (most important)
+                if discriminator == CREATE_DISCRIMINATOR:
                     logger.info("Found create instruction in Shreder transaction data")
+                    create_instruction = instruction_data
+                    found_create = True
                     
                     # Get the instruction accounts using account indices
-                    instruction_accounts = []
                     if 'accounts' in instruction:
-                        account_indices_buffer = instruction['accounts']
-                        account_indices = self._convert_buffer_to_bytes(account_indices_buffer)
-                        
-                        # Each account index is 1 byte
+                        account_indices = self._convert_buffer_to_bytes(instruction['accounts'])
+                        # Pre-allocate list for speed
+                        instruction_accounts = []
                         for i in range(len(account_indices)):
                             account_index = account_indices[i]
                             if account_index < len(account_keys):
                                 instruction_accounts.append(account_keys[account_index])
-                    
-                    # Parse the create instruction data
-                    token_info = await self._parse_create_instruction_data(instruction_data, instruction_accounts)
-                    if token_info:
-                        return token_info
+                        create_accounts = instruction_accounts
                         
-            # If no create instruction found, log the discriminators we did find
-            discriminators = []
-            for instruction in message['instructions']:
-                if 'data' in instruction:
-                    data_bytes = self._convert_buffer_to_bytes(instruction['data'])
-                    if len(data_bytes) >= 8:
-                        discriminators.append(list(data_bytes[:8]))
+                # Only collect buy instructions if we found a create (optimization)
+                elif found_create and discriminator == BUY_DISCRIMINATOR:
+                    # Store buy instruction with accounts for dev buy detection
+                    if 'accounts' in instruction:
+                        account_indices = self._convert_buffer_to_bytes(instruction['accounts'])
+                        buy_accounts = []
+                        for i in range(len(account_indices)):
+                            account_index = account_indices[i]
+                            if account_index < len(account_keys):
+                                buy_accounts.append(account_keys[account_index])
+                        
+                        buy_instructions.append({
+                            'data': instruction_data,
+                            'accounts': buy_accounts
+                        })
             
-            logger.debug(f"No create instruction found in Shreder data. Found discriminators: {discriminators}")
-            return None
+            # Early exit if no create instruction found
+            if not found_create or create_instruction is None or create_accounts is None:
+                return None, None
+                
+            # Parse token info (only if we have create instruction)
+            token_info = await self._parse_create_instruction_data(create_instruction, create_accounts)
+            if not token_info:
+                return None, None
+                
+            # Check for dev buy pattern (only if we have buy instructions)
+            dev_buy_amount = None
+            if buy_instructions:
+                dev_buy_amount = self._detect_dev_buy(token_info.creator, buy_instructions)
+                
+            return token_info, dev_buy_amount
             
         except Exception as e:
-            logger.error(f"Error extracting token info from Shreder data: {e}")
+            logger.error(f"Error extracting token info with dev buy from Shreder data: {e}")
             logger.exception("Full traceback:")
-            logger.info(f"Data structure: {json.dumps(data, indent=2)[:1000]}...")
+            return None, None
+
+    def _detect_dev_buy(self, creator_pubkey: Pubkey, buy_instructions: list) -> int | None:
+        """Detect if creator also bought in the same transaction (dev buy).
+        
+        Args:
+            creator_pubkey: Creator pubkey 
+            buy_instructions: List of buy instruction data and accounts
+            
+        Returns:
+            Buy amount in lamports if dev buy detected, None otherwise
+        """
+        if not buy_instructions:
             return None
+            
+        # Convert creator pubkey to bytes once for fast comparison
+        creator_bytes = bytes(creator_pubkey)
+        
+        # Fast iteration with early exit
+        for buy_instr in buy_instructions:
+            buy_accounts = buy_instr['accounts']
+            
+            # Quick length check before accessing index 6
+            if len(buy_accounts) <= 6:
+                continue
+                
+            buyer_pubkey = buy_accounts[6]
+            
+            # Fast bytes comparison - check if creator == buyer
+            if buyer_pubkey == creator_bytes:
+                # Parse buy amount from instruction data (only when match found)
+                buy_amount = self._parse_buy_amount_lamports(buy_instr['data'])
+                if buy_amount and buy_amount > 0:  # Additional sanity check
+                    return buy_amount
+                    
+        return None
 
     async def _parse_create_instruction_data(self, instruction_data: bytes, instruction_accounts: list) -> TokenInfo | None:
         """Parse create instruction data to extract token information.
