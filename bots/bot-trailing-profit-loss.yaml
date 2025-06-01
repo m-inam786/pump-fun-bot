@@ -30,8 +30,8 @@ shreder_socket:
 
 # Trading parameters
 trade:
-  buy_amount: 0.5 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
-  token_amount: 8000000 # Amount of tokens to buy (only valid if developer manager is false)
+  buy_amount: 0.2 # Amount of SOL to spend when buying (in SOL) (only valid if developer manager is false)
+  token_amount: 4000000 # Amount of tokens to buy (only valid if developer manager is false)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%) (only valid if developer manager is false)
   sell_slippage: 0.3 # Slippage tolerance for sells
   
