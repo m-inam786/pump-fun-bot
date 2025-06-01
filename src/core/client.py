@@ -48,6 +48,9 @@ class SolanaClient:
         self.nonce_manager: Optional[NonceManager] = None
         self.nonce_file_path = nonce_file_path
         self.use_durable_nonce = nonce_file_path is not None
+        
+        # Keep-alive task for 0slot.trade tip clients
+        self._tip_keepalive_task = None
 
     async def start(self):
         """Start the client and tip clients."""
@@ -68,6 +71,10 @@ class SolanaClient:
         # Start blockhash updater
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
         logger.info("Recent blockhash system initialized")
+        
+        # Start keep-alive checker for 0slot.trade tip clients
+        self._tip_keepalive_task = asyncio.create_task(self.start_tip_keepalive())
+        logger.info("Tip client keep-alive system initialized")
 
     async def start_blockhash_updater(self, interval: float = 1):
         """Start background task to update recent blockhash."""
@@ -88,6 +95,46 @@ class SolanaClient:
                 raise RuntimeError("No cached blockhash available yet")
             return self._cached_blockhash
 
+    async def is_connected(self, client: AsyncClient) -> bool:
+        """Check if a client connection is healthy.
+        
+        Args:
+            client: AsyncClient instance to check
+            
+        Returns:
+            True if client is connected and healthy, False otherwise
+        """
+        try:
+            # Try to get the health status of the client
+            response = await client.is_connected()
+            return response is not None
+        except Exception as e:
+            logger.warning(f"Client health check failed: {e!s}")
+            return False
+
+    async def start_tip_keepalive(self, interval: float = 60):
+        """Start background task to check keep-alive for 0slot.trade tip clients.
+        
+        Args:
+            interval: Interval in seconds between keep-alive checks
+        """
+        while True:
+            try:
+                # Check each tip client that has 0slot.trade in the URL
+                for i, (tip_client, tip_config) in enumerate(zip(self._tip_clients, self.tip_configs)):
+                    tip_url = tip_config.get('tip_rpc_url', '')
+                    if '0slot.trade' in tip_url:
+                        is_healthy = await self.is_connected(tip_client)
+                        if is_healthy:
+                            logger.debug(f"Tip client {i+1} (0slot.trade) is healthy")
+                        else:
+                            logger.warning(f"Tip client {i+1} (0slot.trade) connection issue detected: {tip_url}")
+                            
+            except Exception as e:
+                logger.error(f"Tip keep-alive check failed: {e!s}")
+            finally:
+                await asyncio.sleep(interval)
+
     async def get_client(self) -> AsyncClient:
         """Get or create the AsyncClient instance.
 
@@ -104,6 +151,13 @@ class SolanaClient:
             self._blockhash_updater_task.cancel()
             try:
                 await self._blockhash_updater_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._tip_keepalive_task:
+            self._tip_keepalive_task.cancel()
+            try:
+                await self._tip_keepalive_task
             except asyncio.CancelledError:
                 pass
 
@@ -272,12 +326,10 @@ class SolanaClient:
                     # Process responses and return the first successful one
                     for i, tip_response in enumerate(tip_responses):
                         if isinstance(tip_response, Exception):
-                            logger.warning(f"Tip service {i+1} failed: {tip_response!s}")
+                            logger.warning(f"Tip service {i+1} failed: {str(tip_response)}")
                             continue
-                        else:
-                            response = tip_response
-                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
-                            break
+                        response = tip_response
+                        logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
                     else:
                         # All tip services failed, fallback to regular client
                         logger.warning("All tip services failed, falling back to regular RPC")

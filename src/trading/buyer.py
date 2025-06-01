@@ -105,6 +105,7 @@ class TokenBuyer(Trader):
                 tx_details = await self.client.get_transaction_details(tx_signature)
                 logger.info(f"Transaction details received for {tx_signature}")
             else:
+                logger.error(f"Transaction failed to confirm: {tx_signature}")
                 return TradeResult(
                     success=False,
                     error_message=f"Transaction failed to confirm: {tx_signature}",
