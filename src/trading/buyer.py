@@ -100,7 +100,7 @@ class TokenBuyer(Trader):
             logger.info(f"Template-based buy transaction sent: {tx_signature}")
 
             logger.info(f"Confirming buy transaction {tx_signature}")
-            if await self.client.confirm_transaction(tx_signature):
+            if await self.client.robust_confirm_transaction(tx_signature):
                 logger.info(f"Transaction confirmed, getting details for {tx_signature}")
                 tx_details = await self.client.get_transaction_details(tx_signature)
                 logger.info(f"Transaction details received for {tx_signature}")

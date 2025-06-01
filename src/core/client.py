@@ -369,21 +369,30 @@ class SolanaClient:
                 await asyncio.sleep(wait_time)
 
     async def confirm_transaction(
-        self, signature: str, commitment: str = "confirmed"
+        self, signature: str, commitment: str = "confirmed", timeout: int = 30
     ) -> bool | None:
-        """Wait for transaction confirmation.
+        """Wait for transaction confirmation with timeout.
 
         Args:
             signature: Transaction signature
             commitment: Confirmation commitment level
+            timeout: Maximum time to wait for confirmation in seconds
 
         Returns:
             Whether transaction was confirmed
         """
         client = await self.get_client()
         try:
-            await client.confirm_transaction(signature, commitment=commitment, sleep_seconds=1)
+            logger.info(f"Confirming transaction {signature} with {timeout}s timeout")
+            await asyncio.wait_for(
+                client.confirm_transaction(signature, commitment=commitment, sleep_seconds=1),
+                timeout=timeout
+            )
+            logger.info(f"Transaction {signature} confirmed successfully")
             return True
+        except asyncio.TimeoutError:
+            logger.warning(f"Transaction confirmation timed out after {timeout}s for {signature}")
+            return False
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")
             return False
@@ -425,3 +434,64 @@ class SolanaClient:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode RPC response: {e!s}", exc_info=True)
             return None
+
+    async def check_transaction_status(self, signature: str, max_attempts: int = 10, delay: float = 2.0) -> bool:
+        """Check transaction status by fetching transaction details.
+        
+        This is a fallback method when confirm_transaction hangs.
+        
+        Args:
+            signature: Transaction signature
+            max_attempts: Maximum number of attempts to check status
+            delay: Delay between attempts in seconds
+            
+        Returns:
+            True if transaction was successful, False otherwise
+        """
+        logger.info(f"Checking transaction status for {signature}")
+        
+        for attempt in range(max_attempts):
+            try:
+                tx_details = await self.get_transaction_details(signature, commitment="confirmed")
+                
+                if tx_details is not None:
+                    # Check if transaction was successful (no error)
+                    if tx_details.meta and tx_details.meta.err is None:
+                        logger.info(f"Transaction {signature} confirmed via status check (attempt {attempt + 1})")
+                        return True
+                    else:
+                        logger.error(f"Transaction {signature} failed: {tx_details.meta.err if tx_details.meta else 'Unknown error'}")
+                        return False
+                else:
+                    logger.debug(f"Transaction {signature} not found yet (attempt {attempt + 1}/{max_attempts})")
+                    
+            except Exception as e:
+                logger.warning(f"Error checking transaction status (attempt {attempt + 1}): {e!s}")
+                
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(delay)
+        
+        logger.warning(f"Could not confirm transaction status for {signature} after {max_attempts} attempts")
+        return False
+
+    async def robust_confirm_transaction(self, signature: str, commitment: str = "confirmed") -> bool:
+        """Robustly confirm a transaction using multiple methods.
+        
+        First tries standard confirmation with timeout, then falls back to status check fallback.
+        
+        Args:
+            signature: Transaction signature
+            commitment: Confirmation commitment level
+            
+        Returns:
+            True if transaction was confirmed, False otherwise
+        """
+        # First try standard confirmation with timeout
+        confirmation_result = await self.confirm_transaction(signature, commitment, timeout=15)
+        
+        if confirmation_result is True:
+            return True
+        
+        # If confirmation failed or timed out, try status check fallback
+        logger.info(f"Standard confirmation failed for {signature}, trying status check fallback")
+        return await self.check_transaction_status(signature, max_attempts=8, delay=1.5)

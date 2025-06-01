@@ -522,7 +522,7 @@ class TrailingTokenSeller(TokenSeller):
             min_sol_output,
         )
 
-        success = await self.client.confirm_transaction(tx_signature)
+        success = await self.client.robust_confirm_transaction(tx_signature)
 
         if success:
             logger.info(f"Sell transaction confirmed: {tx_signature} | Retrieving transaction details for further confirmation")
