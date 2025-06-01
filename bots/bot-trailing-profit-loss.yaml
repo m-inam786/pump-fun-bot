@@ -89,7 +89,7 @@ discord:
 # Tip manager configuration
 custom_tip:
   enabled: true # Set to true to enable tip manager for faster transactions
-  tip_combo: "[10000000,${TEMPORAL_TIP_ACCOUNT1},${TEMPORAL_TIP_RPC_URL}],[10000000,${TEMPORAL_TIP_ACCOUNT2},${TEMPORAL_TIP_RPC_URL}],[10000000,${TEMPORAL_TIP_ACCOUNT3},${TEMPORAL_TIP_RPC_URL}],[10000000,${ZERSLOT_TIP_ACCOUNT1},${ZERSLOT_TIP_RPC_URL1}],[10000000,${ZERSLOT_TIP_ACCOUNT2},${ZERSLOT_TIP_RPC_URL2}]" # Tip combo string
+  tip_combo: "[10000000,TEMPaMeCRFAS9EKF53Jd6KpHxgL47uWLcpFArU1Fanq,http://use.temporal.xyz/?c=ac65d7c9-b88e-480e-a138-5e9c79ed46da],[10000000,noz3jAjPiHuBPqiSPkkugaJDkJscPuRhYnSpbi8UvC4,http://use.temporal.xyz/?c=ac65d7c9-b88e-480e-a138-5e9c79ed46da],[10000000,noz3str9KXfpKknefHji8L1mPgimezaiUyCHYMDv1GE,http://use.temporal.xyz/?c=ac65d7c9-b88e-480e-a138-5e9c79ed46da],[10000000,4HiwLEP2Bzqj3hM2ENxJuzhcPCdsafwiet3oGkMkuQY4,http://ny.0slot.trade/?api-key=dedd2d8613c140429328b149a1a63fe3],[10000000,6fQaVhYZA4w3MBSXjJ81Vf6W1EDYeUPXpgVQ6UQyU1Av,http://de.0slot.trade/?api-key=dedd2d8613c140429328b149a1a63fe3]" # Tip combo string
 
 nonce_account:
   file: "data/nonce_account.json"
