@@ -101,14 +101,11 @@ class BuyTxBuilder:
         buy_slippage: float,
         priority_fee_microlamports: int,
         wallet_instance: Wallet,
-        tip_amount_lamports: int | None = None,
-        tip_destination: Pubkey | None = None,
         token_amount: int = 1000000,
     ):
         """Set bot configuration values for static templates."""
         global BUY_TX, WALLET_INSTANCE
         WALLET_INSTANCE = wallet_instance
-        wallet_pubkey = wallet_instance.pubkey
         
         # Update compute unit price (priority fee)
         BUY_TX[1] = set_compute_unit_price(priority_fee_microlamports)
@@ -128,18 +125,6 @@ class BuyTxBuilder:
             data=buy_data,
             accounts=BUY_TX[3].accounts
         )
-        
-        # Add tip instruction if provided
-        if tip_amount_lamports and tip_destination:
-            BUY_TX.append(
-                transfer(
-                    TransferParams(
-                        from_pubkey=wallet_pubkey,
-                        to_pubkey=tip_destination,
-                        lamports=tip_amount_lamports,
-                    )
-                )
-            )
     
     @staticmethod
     def get_buy_tx_fast(
@@ -189,10 +174,6 @@ class BuyTxBuilder:
                 ]
             )
         ]
-        
-        # Include any additional instructions (like tip instructions) that were added to BUY_TX
-        if len(BUY_TX) > 4:
-            instructions.extend(BUY_TX[4:])
         
         return instructions
 

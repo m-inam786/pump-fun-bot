@@ -141,11 +141,8 @@ class PumpTrader:
         # SOL/USD converter settings
         sol_price_update_interval: int = 480,  # 8 minutes
 
-        # Custom tip settings
-        use_custom_tip: bool = False,
-        tip_lamports: int = 2000000,
-        tip_account: str | None = None,
-        tip_rpc_url: str | None = None,
+        # Multiple tip configurations
+        tip_configs: list[dict] | None = None,
 
         # Nonce account settings
         nonce_account_file: str | None = None,
@@ -215,24 +212,21 @@ class PumpTrader:
             
             sol_price_update_interval: Time between SOL price updates in seconds
 
-            use_custom_tip: Whether to enable custom tip manager for faster transactions
-            tip_lamports: Default tip amount in lamports
-            tip_account: Tip account public key
-            tip_rpc_url: Tip RPC URL
+            tip_configs: List of tip configurations with tip_lamports, tip_account, and tip_rpc_url
 
             nonce_account_file: Path to nonce account file
         """
 
-        # Initialize custom tip based on configuration
-        if use_custom_tip:
-            logger.info("Custom tip enabled. Solana client will use custom tip RPC URL.")
-            self.tip_rpc_url = tip_rpc_url
-            self.tip_lamports = tip_lamports
-            self.tip_account = Pubkey.from_string(tip_account)
-            self.solana_client = SolanaClient(rpc_endpoint, tip_rpc_url=tip_rpc_url, nonce_file_path=nonce_account_file)
+        # Initialize Solana client with multiple tip configurations
+        if tip_configs and len(tip_configs) > 0:
+            logger.info(f"Multiple tip enabled with {len(tip_configs)} tip services")
+            for i, config in enumerate(tip_configs):
+                logger.info(f"  Tip service {i+1}: {config['tip_lamports']} lamports to {config['tip_account']} via {config['tip_rpc_url']}")
+            self.tip_configs = tip_configs
+            self.solana_client = SolanaClient(rpc_endpoint, tip_configs=tip_configs, nonce_file_path=nonce_account_file)
         else:
-            logger.info("Custom tip disabled. Using regular Solana client.")
-            self.tip_account = None
+            logger.info("No tip configurations provided. Using regular Solana client.")
+            self.tip_configs = []
             self.solana_client = SolanaClient(rpc_endpoint, nonce_file_path=nonce_account_file)
 
         self.wallet = Wallet(private_key)
@@ -265,8 +259,6 @@ class PumpTrader:
             buy_slippage=buy_slippage,
             priority_fee_microlamports=fixed_priority_fee,
             wallet_instance=self.wallet,
-            tip_amount_lamports=tip_lamports if use_custom_tip else None,
-            tip_destination=self.tip_account if use_custom_tip else None,
             token_amount=token_amount
         )
         logger.info(f"Initialized static buy template with: buy_amount={buy_amount}, slippage={buy_slippage}, priority_fee={fixed_priority_fee}")
@@ -352,6 +344,11 @@ class PumpTrader:
         if enable_developer_manager:
             if not all([db_host, db_port, db_name, db_user, db_password, db_query_file]):
                 raise ValueError("Database configuration required when developer manager is enabled")
+            
+            # Get tip destination from first tip config if available
+            tip_destination = None
+            if self.tip_configs:
+                tip_destination = Pubkey.from_string(self.tip_configs[0]['tip_account'])
                 
             self.developer_manager = DeveloperManager(
                 db_host=db_host,
@@ -365,7 +362,7 @@ class PumpTrader:
                 max_age_days=developer_age_days,
                 persisted_whitelist_filepath=sniped_devs_file,
                 discord_notifier=self.discord_notifier,
-                tip_destination=self.tip_account if self.tip_account else None,
+                tip_destination=tip_destination,
                 fetch_from_db=fetch_developers_from_db,
             )
             logger.info("Developer manager enabled")

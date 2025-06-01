@@ -18,24 +18,28 @@ from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 from utils.logger import get_logger
 from core.nonce_manager import NonceManager
+from solders.system_program import transfer, TransferParams
 
 logger = get_logger(__name__)
 
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str, tip_rpc_url: str | None = None, nonce_file_path: str | None = None):
-        """Initialize Solana client with RPC endpoint.
+    def __init__(self, rpc_endpoint: str, tip_configs: list[dict] | None = None, nonce_file_path: str | None = None):
+        """Initialize Solana client with RPC endpoint and optional tip configurations.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
-            tip_rpc_url: URL of the custom tip RPC endpoint
+            tip_configs: List of tip configurations with tip_lamports, tip_account, and tip_rpc_url
             nonce_file_path: Path to nonce account file for durable transactions
         """
         self.rpc_endpoint = rpc_endpoint
         self._client = None
-        self.tip_rpc_url = tip_rpc_url
-        self._tip_client = None
+        
+        # Initialize multiple tip clients
+        self.tip_configs = tip_configs or []
+        self._tip_clients = []
+        
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = None
@@ -46,9 +50,14 @@ class SolanaClient:
         self.use_durable_nonce = nonce_file_path is not None
 
     async def start(self):
-        """Start the client and tip client."""
+        """Start the client and tip clients."""
         self._client = await self.get_client()
-        self._tip_client = await self.get_tip_client()
+        
+        # Initialize tip clients for each tip configuration
+        for i, tip_config in enumerate(self.tip_configs):
+            tip_client = AsyncClient(tip_config['tip_rpc_url'])
+            self._tip_clients.append(tip_client)
+            logger.info(f"Initialized tip client {i+1} for {tip_config['tip_rpc_url']}")
         
         # Initialize nonce manager if using durable nonces
         if self.use_durable_nonce and self.nonce_file_path:
@@ -88,12 +97,6 @@ class SolanaClient:
         if self._client is None:
             self._client = AsyncClient(self.rpc_endpoint)
         return self._client
-    
-    async def get_tip_client(self) -> AsyncClient:
-        """Get or create the AsyncClient instance for tip RPC URL."""
-        if self._tip_client is None:
-            self._tip_client = AsyncClient(self.tip_rpc_url)
-        return self._tip_client
 
     async def close(self):
         """Close the client connection and stop the blockhash updater."""
@@ -108,9 +111,10 @@ class SolanaClient:
             await self._client.close()
             self._client = None
         
-        if self._tip_client:
-            await self._tip_client.close()
-            self._tip_client = None
+        # Close all tip clients
+        for tip_client in self._tip_clients:
+            await tip_client.close()
+        self._tip_clients = []
 
     async def get_health(self) -> str | None:
         body = {
@@ -176,6 +180,7 @@ class SolanaClient:
     ) -> str:
         """
         Send a transaction with durable nonce or recent blockhash.
+        For buy transactions, uses multiple tip services concurrently if available.
 
         Args:
             instructions: List of instructions to include in the transaction.
@@ -219,38 +224,71 @@ class SolanaClient:
 
         # Add the provided instructions
         tx_instructions.extend(instructions)
-        
-        # Create message with instructions and payer
-        message = Message.new_with_blockhash(
-            tx_instructions,
-            signer_keypair.pubkey(),  # payer
-            blockhash
-        )
-        
-        # Create transaction with signers and message
-        transaction = Transaction(signers, message, blockhash)
 
         for attempt in range(max_retries):
             try:
                 tx_opts = TxOpts(
                     skip_preflight=skip_preflight, preflight_commitment=Processed
                 )
-                # Use tip RPC client if tip is provided, otherwise use default client
-                if self.tip_rpc_url and tx_type == "buy":
-                    tip_client = await self.get_tip_client()
-                    # spam 5 buy txs with tip rpc using asyncio.gather
-                    buy_tx_tasks = [tip_client.send_transaction(transaction, tx_opts) for _ in range(5)]
-                    responses = await asyncio.gather(*buy_tx_tasks, return_exceptions=True)
-                    # process the responses and get the successful response
-                    for response in responses:
-                        if isinstance(response, Exception):
-                            logger.error(f"Unsuccessful transaction in spam: {response!s}")
+                
+                # Use multiple tip services concurrently for buy transactions
+                if self._tip_clients and tx_type == "buy":
+                    logger.info(f"Sending buy transaction via {len(self._tip_clients)} tip services concurrently")
+                    
+                    # Create transactions with different tip instructions for each tip service
+                    tip_tasks = []
+                    for i, (tip_client, tip_config) in enumerate(zip(self._tip_clients, self.tip_configs)):
+                        # Create a copy of instructions and add tip instruction for this service
+                        tx_instructions_with_tip = tx_instructions.copy()
+                        tip_instruction = transfer(
+                            TransferParams(
+                                from_pubkey=signer_keypair.pubkey(),
+                                to_pubkey=Pubkey.from_string(tip_config['tip_account']),
+                                lamports=tip_config['tip_lamports'],
+                            )
+                        )
+                        tx_instructions_with_tip.append(tip_instruction)
+                        
+                        # Create message and transaction for this tip service
+                        message = Message.new_with_blockhash(
+                            tx_instructions_with_tip,
+                            signer_keypair.pubkey(),  # payer
+                            blockhash
+                        )
+                        transaction = Transaction(signers, message, blockhash)
+                        
+                        # Add task for this tip service
+                        tip_tasks.append(tip_client.send_transaction(transaction, tx_opts))
+                    
+                    tip_responses = await asyncio.gather(*tip_tasks, return_exceptions=True)
+                    
+                    # Process responses and return the first successful one
+                    for i, tip_response in enumerate(tip_responses):
+                        if isinstance(tip_response, Exception):
+                            logger.warning(f"Tip service {i+1} failed: {tip_response!s}")
                             continue
                         else:
-                            response = response.value
-                            logger.info(f"Found successful transaction in spam: {response!s}")
+                            response = tip_response
+                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
                             break
+                    else:
+                        # All tip services failed, fallback to regular client
+                        logger.warning("All tip services failed, falling back to regular RPC")
+                        message = Message.new_with_blockhash(
+                            tx_instructions,
+                            signer_keypair.pubkey(),  # payer
+                            blockhash
+                        )
+                        transaction = Transaction(signers, message, blockhash)
+                        response = await client.send_transaction(transaction, tx_opts)
                 else:
+                    # Use regular client for sell transactions or when no tip clients
+                    message = Message.new_with_blockhash(
+                        tx_instructions,
+                        signer_keypair.pubkey(),  # payer
+                        blockhash
+                    )
+                    transaction = Transaction(signers, message, blockhash)
                     response = await client.send_transaction(transaction, tx_opts)
                 
                 # If using durable nonce, advance it after successful transaction

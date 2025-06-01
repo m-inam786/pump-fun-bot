@@ -3,6 +3,8 @@ import logging
 import multiprocessing
 from datetime import datetime
 from pathlib import Path
+import json
+import re
 
 import uvloop
 
@@ -28,6 +30,44 @@ def setup_logging(bot_name: str):
     
     setup_file_logging(str(log_filename))
 
+def parse_tip_combo(tip_combo_string: str) -> list[dict]:
+    """
+    Parse tip_combo string into a list of tip configurations.
+    
+    Expected format: "[amount,account,rpc_url],[amount,account,rpc_url],..."
+    
+    Args:
+        tip_combo_string: String containing tip configurations
+        
+    Returns:
+        List of dictionaries with tip_lamports, tip_account, and tip_rpc_url
+    """
+    if not tip_combo_string:
+        return []
+    
+    tip_configs = []
+    
+    # Extract individual tip configurations using regex
+    # Matches [anything,anything,anything] patterns
+    pattern = r'\[([^\]]+)\]'
+    matches = re.findall(pattern, tip_combo_string)
+    
+    for match in matches:
+        parts = [part.strip() for part in match.split(',')]
+        if len(parts) == 3:
+            try:
+                tip_config = {
+                    'tip_lamports': int(parts[0]),
+                    'tip_account': parts[1],
+                    'tip_rpc_url': parts[2]
+                }
+                tip_configs.append(tip_config)
+            except ValueError as e:
+                logging.warning(f"Failed to parse tip config {parts}: {e}")
+    
+    logging.info(f"Parsed {len(tip_configs)} tip configurations from tip_combo")
+    return tip_configs
+
 async def start_bot(config_path: str):
     """
     Start a trading bot with the configuration from the specified path.
@@ -38,6 +78,14 @@ async def start_bot(config_path: str):
     cfg = load_bot_config(config_path)
     setup_logging(cfg["name"])
     print_config_summary(cfg)
+    
+    # Parse tip configurations if custom tip is enabled
+    tip_configs = []
+    if cfg.get("custom_tip", {}).get("enabled", False):
+        tip_combo_string = cfg.get("custom_tip", {}).get("tip_combo", "")
+        tip_configs = parse_tip_combo(tip_combo_string)
+        if not tip_configs:
+            logging.warning("Custom tip enabled but no valid tip configurations found in tip_combo")
     
     trader = PumpTrader(
         # Connection settings
@@ -125,11 +173,8 @@ async def start_bot(config_path: str):
         discord_retry_limit=cfg.get("discord", {}).get("retry_limit", 3),
         discord_bot_token=cfg.get("discord", {}).get("bot_token"),
 
-        # Custom tip settings
-        use_custom_tip=cfg.get("custom_tip", {}).get("enabled", False),
-        tip_lamports=cfg.get("custom_tip", {}).get("tip_lamports", 2000000),
-        tip_account=cfg.get("custom_tip", {}).get("tip_account"),
-        tip_rpc_url=cfg.get("custom_tip", {}).get("tip_rpc_url"),
+        # Multiple tip configurations instead of single tip settings
+        tip_configs=tip_configs,
 
         # Nonce account settings
         nonce_account_file=cfg.get("nonce_account", {}).get("file"),

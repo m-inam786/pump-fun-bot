@@ -89,9 +89,7 @@ discord:
 # Tip manager configuration
 custom_tip:
   enabled: true # Set to true to enable tip manager for faster transactions
-  tip_lamports: 10_000_000 # Amount of lamports to tip for faster transactions (10000000 = 0.01 SOL) (only valid if developer manager is false)
-  tip_account: "${TIP_ACCOUNT}" # Replace with tip account public key
-  tip_rpc_url: "${TIP_RPC_URL}" # Replace with tip RPC URL
+  tip_combo: "[10000000,${TEMPORAL_TIP_ACCOUNT1},${TEMPORAL_TIP_RPC_URL}],[10000000,${TEMPORAL_TIP_ACCOUNT2},${TEMPORAL_TIP_RPC_URL}],[10000000,${TEMPORAL_TIP_ACCOUNT3},${TEMPORAL_TIP_RPC_URL}],[10000000,${ZERSLOT_TIP_ACCOUNT1},${ZERSLOT_TIP_RPC_URL1}],[10000000,${ZERSLOT_TIP_ACCOUNT2},${ZERSLOT_TIP_RPC_URL2}]" # Tip combo string
 
 nonce_account:
   file: "data/nonce_account.json"
