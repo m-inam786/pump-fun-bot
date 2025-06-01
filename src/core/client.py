@@ -238,7 +238,18 @@ class SolanaClient:
                 # Use tip RPC client if tip is provided, otherwise use default client
                 if self.tip_rpc_url and tx_type == "buy":
                     tip_client = await self.get_tip_client()
-                    response = await tip_client.send_transaction(transaction, tx_opts)
+                    # spam 5 buy txs with tip rpc using asyncio.gather
+                    buy_tx_tasks = [tip_client.send_transaction(transaction, tx_opts) for _ in range(5)]
+                    responses = await asyncio.gather(*buy_tx_tasks, return_exceptions=True)
+                    # process the responses and get the successful response
+                    for response in responses:
+                        if isinstance(response, Exception):
+                            logger.error(f"Unsuccessful transaction in spam: {response!s}")
+                            continue
+                        else:
+                            response = response.value
+                            logger.info(f"Found successful transaction in spam: {response!s}")
+                            break
                 else:
                     response = await client.send_transaction(transaction, tx_opts)
                 
