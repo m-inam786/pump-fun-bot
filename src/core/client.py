@@ -393,8 +393,12 @@ class SolanaClient:
         """
         client = await self.get_client()
         try:
-            await client.confirm_transaction(signature, commitment=commitment, sleep_seconds=0.5)
+            # add task timeout to avoid stucking in the loop
+            await asyncio.wait_for(client.confirm_transaction(signature, commitment=commitment, sleep_seconds=0.5), timeout=5)
             return True
+        except asyncio.TimeoutError:
+            logger.error(f"Transaction {signature} confirmation timed out")
+            return False
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")
             return False
