@@ -247,7 +247,14 @@ class SolanaClient:
                                 lamports=tip_config['tip_lamports'],
                             )
                         )
-                        tx_instructions_with_tip.append(tip_instruction)
+                        
+                        # Insert tip instruction after nonce (if present) or at the beginning
+                        if self.use_durable_nonce and self.nonce_manager:
+                            # Insert tip instruction after nonce instruction (index 1)
+                            tx_instructions_with_tip.insert(1, tip_instruction)
+                        else:
+                            # Insert tip instruction at the beginning
+                            tx_instructions_with_tip.insert(0, tip_instruction)
                         
                         # Create message and transaction for this tip service
                         message = Message.new_with_blockhash(
