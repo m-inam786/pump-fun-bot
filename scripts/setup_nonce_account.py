@@ -115,7 +115,7 @@ class NonceAccountSetup:
                 await temp_client.close()
             
             # Wait for confirmation
-            confirmed = await self.client.robust_confirm_transaction(tx_signature)
+            confirmed = await self.client.confirm_transaction(tx_signature)
             if not confirmed:
                 raise Exception("Nonce account creation transaction failed to confirm")
             

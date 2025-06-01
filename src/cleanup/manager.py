@@ -102,7 +102,7 @@ class AccountCleanupManager:
                     self.wallet.keypair,
                     skip_preflight=True,
                 )
-                await self.client.robust_confirm_transaction(tx_sig)
+                await self.client.confirm_transaction(tx_sig)
                 logger.info(f"Closed successfully: {ata}")
 
         except Exception as e:

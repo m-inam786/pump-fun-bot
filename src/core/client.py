@@ -58,13 +58,9 @@ class SolanaClient:
         
         # Initialize tip clients for each tip configuration
         for i, tip_config in enumerate(self.tip_configs):
-            try:
-                tip_client = AsyncClient(tip_config['tip_rpc_url'])
-                self._tip_clients.append(tip_client)
-                logger.info(f"Initialized tip client {i+1} for {tip_config['tip_rpc_url']}")
-            except Exception as e:
-                logger.error(f"Failed to initialize tip client {i+1} for {tip_config['tip_rpc_url']}: {type(e).__name__}: {e}")
-                # Continue with other tip clients rather than failing completely
+            tip_client = AsyncClient(tip_config['tip_rpc_url'])
+            self._tip_clients.append(tip_client)
+            logger.info(f"Initialized tip client {i+1} for {tip_config['tip_rpc_url']}")
         
         # Initialize nonce manager if using durable nonces
         if self.use_durable_nonce and self.nonce_file_path:
@@ -73,8 +69,8 @@ class SolanaClient:
             logger.info("Durable nonce system initialized")
 
         # Start blockhash updater
-        self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
-        logger.info("Recent blockhash system initialized")
+        # self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
+        # logger.info("Recent blockhash system initialized")
         
         # Start keep-alive checker for 0slot.trade tip clients
         self._tip_keepalive_task = asyncio.create_task(self.start_tip_keepalive())
@@ -151,12 +147,12 @@ class SolanaClient:
 
     async def close(self):
         """Close the client connection and stop the blockhash updater."""
-        if self._blockhash_updater_task:
-            self._blockhash_updater_task.cancel()
-            try:
-                await self._blockhash_updater_task
-            except asyncio.CancelledError:
-                pass
+        # if self._blockhash_updater_task:
+        #     self._blockhash_updater_task.cancel()
+        #     try:
+        #         await self._blockhash_updater_task
+        #     except asyncio.CancelledError:
+        #         pass
 
         if self._tip_keepalive_task:
             self._tip_keepalive_task.cancel()
@@ -274,10 +270,12 @@ class SolanaClient:
                 logger.info(f"Using durable nonce: {nonce_hash}")
             else:
                 # Use recent blockhash
-                blockhash = await self.get_cached_blockhash()
+                # blockhash = await self.get_cached_blockhash()
+                blockhash = await self.get_latest_blockhash()
                 logger.info(f"Using recent cached blockhash: {blockhash}")
         else:
-            blockhash = await self.get_cached_blockhash()
+            # blockhash = await self.get_cached_blockhash()
+            blockhash = await self.get_latest_blockhash()
             logger.info(f"Using recent cached blockhash for sell transaction: {blockhash}")
 
         # Add the provided instructions
@@ -291,9 +289,6 @@ class SolanaClient:
                 
                 # Use multiple tip services concurrently for buy transactions
                 if self._tip_clients and tx_type == "buy":
-                    if len(self._tip_clients) != len(self.tip_configs):
-                        logger.warning(f"Only {len(self._tip_clients)} out of {len(self.tip_configs)} tip clients initialized successfully")
-                    
                     logger.info(f"Sending buy transaction via {len(self._tip_clients)} tip services concurrently")
                     
                     # Create transactions with different tip instructions for each tip service
@@ -334,34 +329,15 @@ class SolanaClient:
                     is_success = False
                     for i, tip_response in enumerate(tip_responses):
                         if isinstance(tip_response, Exception):
-                            # Get more detailed error information
-                            error_type = type(tip_response).__name__
-                            error_msg = str(tip_response)
-                            tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
-                            
-                            if not error_msg:
-                                error_msg = f"Unknown {error_type}"
-                            
-                            logger.warning(f"Tip service {i+1} ({tip_url}) failed: {error_type}: {error_msg}")
+                            logger.warning(f"Tip service {i+1} failed: {str(tip_response)}")
                         else:
                             response = tip_response
-                            tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
-                            logger.info(f"Successful buy transaction via tip service {i+1} ({tip_url}): {tip_response!s}")
+                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
                             is_success = True
                             break
                     if not is_success:
-                        # Collect all failure reasons for better error reporting
-                        failure_summary = []
-                        for i, tip_response in enumerate(tip_responses):
-                            if isinstance(tip_response, Exception):
-                                error_type = type(tip_response).__name__
-                                error_msg = str(tip_response) if str(tip_response) else f"Unknown {error_type}"
-                                tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
-                                failure_summary.append(f"Service {i+1} ({tip_url}): {error_type} - {error_msg}")
-                        
-                        failure_details = "; ".join(failure_summary)
-                        logger.error(f"All {len(self._tip_clients)} tip services failed: {failure_details}")
-                        raise Exception(f"All tip services failed: {failure_details}")
+                        logger.error("All tip services failed")
+                        raise Exception("All tip services failed")
                 else:
                     # Use regular client for sell transactions or when no tip clients
                     message = Message.new_with_blockhash(
@@ -395,30 +371,21 @@ class SolanaClient:
                 await asyncio.sleep(wait_time)
 
     async def confirm_transaction(
-        self, signature: str, commitment: str = "confirmed", timeout: int = 30
+        self, signature: str, commitment: str = "confirmed"
     ) -> bool | None:
-        """Wait for transaction confirmation with timeout.
+        """Wait for transaction confirmation.
 
         Args:
             signature: Transaction signature
             commitment: Confirmation commitment level
-            timeout: Maximum time to wait for confirmation in seconds
 
         Returns:
             Whether transaction was confirmed
         """
         client = await self.get_client()
         try:
-            logger.info(f"Confirming transaction {signature} with {timeout}s timeout")
-            await asyncio.wait_for(
-                client.confirm_transaction(signature, commitment=commitment, sleep_seconds=1),
-                timeout=timeout
-            )
-            logger.info(f"Transaction {signature} confirmed successfully")
+            await client.confirm_transaction(signature, commitment=commitment, sleep_seconds=0.5)
             return True
-        except asyncio.TimeoutError:
-            logger.warning(f"Transaction confirmation timed out after {timeout}s for {signature}")
-            return False
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")
             return False
@@ -460,64 +427,3 @@ class SolanaClient:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode RPC response: {e!s}", exc_info=True)
             return None
-
-    async def check_transaction_status(self, signature: str, max_attempts: int = 10, delay: float = 2.0) -> bool:
-        """Check transaction status by fetching transaction details.
-        
-        This is a fallback method when confirm_transaction hangs.
-        
-        Args:
-            signature: Transaction signature
-            max_attempts: Maximum number of attempts to check status
-            delay: Delay between attempts in seconds
-            
-        Returns:
-            True if transaction was successful, False otherwise
-        """
-        logger.info(f"Checking transaction status for {signature}")
-        
-        for attempt in range(max_attempts):
-            try:
-                tx_details = await self.get_transaction_details(signature, commitment="confirmed")
-                
-                if tx_details is not None:
-                    # Check if transaction was successful (no error)
-                    if tx_details.meta and tx_details.meta.err is None:
-                        logger.info(f"Transaction {signature} confirmed via status check (attempt {attempt + 1})")
-                        return True
-                    else:
-                        logger.error(f"Transaction {signature} failed: {tx_details.meta.err if tx_details.meta else 'Unknown error'}")
-                        return False
-                else:
-                    logger.debug(f"Transaction {signature} not found yet (attempt {attempt + 1}/{max_attempts})")
-                    
-            except Exception as e:
-                logger.warning(f"Error checking transaction status (attempt {attempt + 1}): {e!s}")
-                
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(delay)
-        
-        logger.warning(f"Could not confirm transaction status for {signature} after {max_attempts} attempts")
-        return False
-
-    async def robust_confirm_transaction(self, signature: str, commitment: str = "confirmed") -> bool:
-        """Robustly confirm a transaction using multiple methods.
-        
-        First tries standard confirmation with timeout, then falls back to status check fallback.
-        
-        Args:
-            signature: Transaction signature
-            commitment: Confirmation commitment level
-            
-        Returns:
-            True if transaction was confirmed, False otherwise
-        """
-        # First try standard confirmation with timeout
-        confirmation_result = await self.confirm_transaction(signature, commitment, timeout=15)
-        
-        if confirmation_result is True:
-            return True
-        
-        # If confirmation failed or timed out, try status check fallback
-        logger.info(f"Standard confirmation failed for {signature}, trying status check fallback")
-        return await self.check_transaction_status(signature, max_attempts=8, delay=1.5)
