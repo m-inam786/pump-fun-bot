@@ -58,9 +58,13 @@ class SolanaClient:
         
         # Initialize tip clients for each tip configuration
         for i, tip_config in enumerate(self.tip_configs):
-            tip_client = AsyncClient(tip_config['tip_rpc_url'])
-            self._tip_clients.append(tip_client)
-            logger.info(f"Initialized tip client {i+1} for {tip_config['tip_rpc_url']}")
+            try:
+                tip_client = AsyncClient(tip_config['tip_rpc_url'])
+                self._tip_clients.append(tip_client)
+                logger.info(f"Initialized tip client {i+1} for {tip_config['tip_rpc_url']}")
+            except Exception as e:
+                logger.error(f"Failed to initialize tip client {i+1} for {tip_config['tip_rpc_url']}: {type(e).__name__}: {e}")
+                # Continue with other tip clients rather than failing completely
         
         # Initialize nonce manager if using durable nonces
         if self.use_durable_nonce and self.nonce_file_path:
@@ -287,6 +291,9 @@ class SolanaClient:
                 
                 # Use multiple tip services concurrently for buy transactions
                 if self._tip_clients and tx_type == "buy":
+                    if len(self._tip_clients) != len(self.tip_configs):
+                        logger.warning(f"Only {len(self._tip_clients)} out of {len(self.tip_configs)} tip clients initialized successfully")
+                    
                     logger.info(f"Sending buy transaction via {len(self._tip_clients)} tip services concurrently")
                     
                     # Create transactions with different tip instructions for each tip service
@@ -327,15 +334,34 @@ class SolanaClient:
                     is_success = False
                     for i, tip_response in enumerate(tip_responses):
                         if isinstance(tip_response, Exception):
-                            logger.warning(f"Tip service {i+1} failed: {str(tip_response)}")
+                            # Get more detailed error information
+                            error_type = type(tip_response).__name__
+                            error_msg = str(tip_response)
+                            tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
+                            
+                            if not error_msg:
+                                error_msg = f"Unknown {error_type}"
+                            
+                            logger.warning(f"Tip service {i+1} ({tip_url}) failed: {error_type}: {error_msg}")
                         else:
                             response = tip_response
-                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
+                            tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
+                            logger.info(f"Successful buy transaction via tip service {i+1} ({tip_url}): {tip_response!s}")
                             is_success = True
                             break
                     if not is_success:
-                        logger.error("All tip services failed")
-                        raise Exception("All tip services failed")
+                        # Collect all failure reasons for better error reporting
+                        failure_summary = []
+                        for i, tip_response in enumerate(tip_responses):
+                            if isinstance(tip_response, Exception):
+                                error_type = type(tip_response).__name__
+                                error_msg = str(tip_response) if str(tip_response) else f"Unknown {error_type}"
+                                tip_url = self.tip_configs[i].get('tip_rpc_url', 'unknown')
+                                failure_summary.append(f"Service {i+1} ({tip_url}): {error_type} - {error_msg}")
+                        
+                        failure_details = "; ".join(failure_summary)
+                        logger.error(f"All {len(self._tip_clients)} tip services failed: {failure_details}")
+                        raise Exception(f"All tip services failed: {failure_details}")
                 else:
                     # Use regular client for sell transactions or when no tip clients
                     message = Message.new_with_blockhash(
