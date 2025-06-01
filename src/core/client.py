@@ -231,7 +231,7 @@ class SolanaClient:
         skip_preflight: bool = True,
         max_retries: int = 3,
         tx_type: str = "sell",
-    ) -> str:
+    ) -> Union[str, list[str]]:
         """
         Send a transaction with durable nonce or recent blockhash.
         For buy transactions, uses multiple tip services concurrently if available.
@@ -244,7 +244,7 @@ class SolanaClient:
             tx_type: Type of transaction for routing
 
         Returns:
-            Transaction signature.
+            Transaction signature for single transaction, or list of signatures for multiple tip services.
         """
         client = await self.get_client()
 
@@ -325,19 +325,28 @@ class SolanaClient:
                     
                     tip_responses = await asyncio.gather(*tip_tasks, return_exceptions=True)
                     
-                    # Process responses and return the first successful one
-                    is_success = False
+                    # Collect all successful transaction signatures
+                    successful_signatures = []
                     for i, tip_response in enumerate(tip_responses):
                         if isinstance(tip_response, Exception):
                             logger.warning(f"Tip service {i+1} failed: {str(tip_response)}")
                         else:
-                            response = tip_response
-                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
-                            is_success = True
-                            break
-                    if not is_success:
+                            signature = tip_response.value
+                            successful_signatures.append(signature)
+                            logger.info(f"Successful buy transaction via tip service {i+1}: {signature}")
+                    
+                    if not successful_signatures:
                         logger.error("All tip services failed")
                         raise Exception("All tip services failed")
+                    
+                    # If using durable nonce, advance it after successful transaction
+                    if self.use_durable_nonce and self.nonce_manager:
+                        # Note: We advance the nonce optimistically here
+                        # In production, you might want to wait for confirmation first
+                        logger.info(f"Advancing nonce for next buy transaction")
+                        await self.nonce_manager.advance_nonce_and_update()
+                    
+                    return successful_signatures
                 else:
                     # Use regular client for sell transactions or when no tip clients
                     message = Message.new_with_blockhash(
@@ -347,15 +356,15 @@ class SolanaClient:
                     )
                     transaction = Transaction(signers, message, blockhash)
                     response = await client.send_transaction(transaction, tx_opts)
-                
-                # If using durable nonce, advance it after successful transaction
-                if self.use_durable_nonce and self.nonce_manager:
-                    # Note: We advance the nonce optimistically here
-                    # In production, you might want to wait for confirmation first
-                    logger.info(f"Advancing nonce for next buy transaction")
-                    await self.nonce_manager.advance_nonce_and_update()
-                
-                return response.value
+                    
+                    # If using durable nonce, advance it after successful transaction
+                    if self.use_durable_nonce and self.nonce_manager:
+                        # Note: We advance the nonce optimistically here
+                        # In production, you might want to wait for confirmation first
+                        logger.info(f"Advancing nonce for next buy transaction")
+                        await self.nonce_manager.advance_nonce_and_update()
+                    
+                    return response.value
 
             except Exception as e:
                 if attempt == max_retries - 1:

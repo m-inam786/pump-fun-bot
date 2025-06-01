@@ -13,6 +13,7 @@ from templates.buy_tx import BuyTxBuilder
 from utils.logger import get_logger
 from utils.serializer import PumpFunSerializer
 from decimal import Decimal
+import asyncio
 
 logger = get_logger(__name__)
 
@@ -89,7 +90,7 @@ class TokenBuyer(Trader):
                 logger.info(f"Static template buy for non developer manager mode")
 
             # Send transaction using template-based instructions
-            tx_signature = await self.client.build_and_send_transaction(
+            tx_result = await self.client.build_and_send_transaction(
                 instructions,
                 self.wallet.keypair,
                 skip_preflight=True,
@@ -97,30 +98,82 @@ class TokenBuyer(Trader):
                 tx_type="buy"
             )
 
-            logger.info(f"Template-based buy transaction sent: {tx_signature}")
-
-            logger.info(f"Confirming buy transaction {tx_signature}")
-            if await self.client.confirm_transaction(tx_signature):
-                logger.info(f"Transaction confirmed, getting details for {tx_signature}")
-                tx_details = await self.client.get_transaction_details(tx_signature)
-                logger.info(f"Transaction details received for {tx_signature}")
+            # Handle both single signature and multiple signatures
+            if isinstance(tx_result, list):
+                tx_signatures = tx_result
+                logger.info(f"Template-based buy transactions sent: {len(tx_signatures)} signatures: {tx_signatures}")
             else:
-                logger.error(f"Transaction failed to confirm: {tx_signature}")
+                tx_signatures = [tx_result]
+                logger.info(f"Template-based buy transaction sent: {tx_result}")
+
+            # Confirm transactions concurrently and use first confirmed one
+            logger.info(f"Confirming {len(tx_signatures)} buy transaction(s) concurrently")
+            
+            # Create confirmation tasks
+            tasks = {
+                asyncio.create_task(self._confirm_and_get_details(tx_signature)): tx_signature
+                for tx_signature in tx_signatures
+            }
+            
+            confirmed_signature = None
+            primary_tx_details = None
+            
+            try:
+                # Wait for first successful confirmation
+                while tasks and confirmed_signature is None:
+                    done, pending = await asyncio.wait(tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+                    
+                    for task in done:
+                        tx_signature = tasks[task]
+                        try:
+                            signature, details = await task
+                            # First successful confirmation - use it and cancel others
+                            confirmed_signature = signature
+                            primary_tx_details = details
+                            if pending:
+                                logger.info(f"First transaction confirmed: {signature} - cancelling {len(pending)} remaining tasks")
+                                # Cancel all pending tasks
+                                for pending_task in pending:
+                                    pending_task.cancel()
+                            else:
+                                logger.info(f"Transaction confirmed: {signature}")
+                            break
+                            
+                        except Exception as e:
+                            logger.warning(f"Transaction {tx_signature} confirmation failed: {str(e)}")
+                            # Remove failed task and continue
+                            del tasks[task]
+            
+            except Exception as e:
+                # Cancel all tasks on error
+                for task in tasks.keys():
+                    if not task.done():
+                        task.cancel()
+                logger.error(f"Error during transaction confirmation: {e}")
                 return TradeResult(
                     success=False,
-                    error_message=f"Transaction failed to confirm: {tx_signature}",
+                    error_message=f"Error during transaction confirmation: {e}",
+                )
+            
+            # Check if any transactions were confirmed
+            if confirmed_signature is None:
+                logger.error(f"All transactions failed to confirm: {tx_signatures}")
+                return TradeResult(
+                    success=False,
+                    error_message=f"All transactions failed to confirm: {tx_signatures}",
                 )
 
-            if tx_details and tx_details.transaction.meta:
+            # Process the confirmed transaction for result details
+            if primary_tx_details and primary_tx_details.transaction.meta:
                 # Check transaction success
-                if tx_details.transaction.meta.err:
-                    error_info = tx_details.transaction.meta.err
-                    logger.error(f"Buy operation failed: Transaction {tx_signature} failed with error: {error_info}")
+                if primary_tx_details.transaction.meta.err:
+                    error_info = primary_tx_details.transaction.meta.err
+                    logger.error(f"Buy operation failed: Transaction {confirmed_signature} failed with error: {error_info}")
                     
                     # Extract error details from logs if available
                     try:
-                        if hasattr(tx_details.transaction.meta, 'log_messages') and tx_details.transaction.meta.log_messages:
-                            logs = tx_details.transaction.meta.log_messages
+                        if hasattr(primary_tx_details.transaction.meta, 'log_messages') and primary_tx_details.transaction.meta.log_messages:
+                            logs = primary_tx_details.transaction.meta.log_messages
                             error_logs = [log for log in logs if "Error" in log or "error" in log or "failed" in log or "Failed" in log]
                             if error_logs:
                                 logger.error(f"Error details from logs: {error_logs}")
@@ -137,7 +190,7 @@ class TokenBuyer(Trader):
                 # Parse transaction details for price information
                 token_price_sol = 0.0
                 
-                for log_entry in tx_details.transaction.meta.log_messages:
+                for log_entry in primary_tx_details.transaction.meta.log_messages:
                     if "Program data:" in log_entry:
                         try:
                             idx = log_entry.find("Program data: ")
@@ -168,20 +221,37 @@ class TokenBuyer(Trader):
                         except Exception as e:
                             logger.error(f"Error calculating price from parsed data: {e}. Data: {parsed_data}")
                 
-                logger.info(f"Template-based buy transaction successful: {tx_signature} with price {token_price_sol} SOL")
+                logger.info(f"Template-based buy transactions successful: {confirmed_signature} confirmed out of {len(tx_signatures)} sent")
+                logger.info(f"Primary transaction: {confirmed_signature} with price {token_price_sol} SOL")
+                
                 return TradeResult(
                     success=True,
-                    tx_signature=tx_signature,
+                    tx_signature=confirmed_signature,  # Primary signature for backward compatibility
                     amount=token_amount,
                     price=token_price_sol,
                 )
             else:
-                logger.error(f"Buy operation failed: Transaction details not received for {tx_signature}")
+                logger.error(f"Buy operation failed: Transaction details not received for {confirmed_signature}")
                 return TradeResult(
                     success=False,
-                    error_message=f"Transaction failed to confirm: {tx_signature}",
+                    error_message=f"Transaction failed to confirm: {confirmed_signature}",
                 )
 
         except Exception as e:
             logger.error(f"Template-based buy operation failed: {e!s}")
             return TradeResult(success=False, error_message=str(e))
+
+    async def _confirm_and_get_details(self, tx_signature: str):
+        """Confirm transaction and get details, raising exception on failure."""
+        logger.info(f"Confirming buy transaction {tx_signature}")
+        if await self.client.confirm_transaction(tx_signature):
+            logger.info(f"Transaction confirmed, getting details for {tx_signature}")
+            tx_details = await self.client.get_transaction_details(tx_signature)
+            if tx_details:
+                return tx_signature, tx_details
+            else:
+                logger.warning(f"Transaction confirmed but details not received for {tx_signature}")
+                raise Exception(f"Transaction details not received for {tx_signature}")
+        else:
+            logger.error(f"Transaction failed to confirm: {tx_signature}")
+            raise Exception(f"Transaction failed to confirm: {tx_signature}")
