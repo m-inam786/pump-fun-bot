@@ -324,22 +324,18 @@ class SolanaClient:
                     tip_responses = await asyncio.gather(*tip_tasks, return_exceptions=True)
                     
                     # Process responses and return the first successful one
+                    is_success = False
                     for i, tip_response in enumerate(tip_responses):
                         if isinstance(tip_response, Exception):
                             logger.warning(f"Tip service {i+1} failed: {str(tip_response)}")
-                            continue
-                        response = tip_response
-                        logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
-                    else:
-                        # All tip services failed, fallback to regular client
-                        logger.warning("All tip services failed, falling back to regular RPC")
-                        message = Message.new_with_blockhash(
-                            tx_instructions,
-                            signer_keypair.pubkey(),  # payer
-                            blockhash
-                        )
-                        transaction = Transaction(signers, message, blockhash)
-                        response = await client.send_transaction(transaction, tx_opts)
+                        else:
+                            response = tip_response
+                            logger.info(f"Successful buy transaction via tip service {i+1}: {tip_response!s}")
+                            is_success = True
+                            break
+                    if not is_success:
+                        logger.error("All tip services failed")
+                        raise Exception("All tip services failed")
                 else:
                     # Use regular client for sell transactions or when no tip clients
                     message = Message.new_with_blockhash(
